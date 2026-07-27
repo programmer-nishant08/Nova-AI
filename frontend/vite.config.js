@@ -7,10 +7,14 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://nova-ai-r2ex.onrender.com',
         changeOrigin: true,
         secure: false,
       },
     },
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
   },
 })
