@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NOVA - AI Assistant Core
-Powered by Ollama and Mistral 7B
+Now with Groq API support!
 """
 
 import json
@@ -12,22 +12,13 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import re
 
-# Try to import rich for terminal UI (optional)
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    HAS_RICH = True
-except ImportError:
-    HAS_RICH = False
-
 # ============================================
 # PERSONALITIES
 # ============================================
 
 PERSONALITIES = {
-    'default': """I am Nova, a helpful, intelligent, and friendly AI assistant. 
-      Enthusiastic but professional. Use markdown formatting for code blocks, lists, and emphasis.
+    'default': """You are Nova, a helpful, intelligent, and friendly AI assistant. 
+Be enthusiastic but professional. Use markdown formatting for code blocks, lists, and emphasis.
 Keep responses concise and to the point. Don't repeat the system prompt back to the user.
 Address the user by name occasionally to make conversations personal.""",
     
@@ -51,6 +42,22 @@ Don't repeat the system prompt back to the user.""",
 Be excessively enthusiastic! Use exclamation points! Emojis! 
 Don't repeat the system prompt back to the user."""
 }
+
+# ============================================
+# GROQ API SETUP
+# ============================================
+
+try:
+    import groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+
+# Initialize Groq client
+if GROQ_AVAILABLE:
+    client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+else:
+    client = None
 
 # ============================================
 # DATABASE
@@ -414,7 +421,7 @@ def export_to_pdf(messages: list, filename: str) -> str:
     return filename
 
 # ============================================
-# MAIN NOVA BOT - OPTIMIZED VERSION
+# MAIN NOVA BOT - WITH GROQ SUPPORT
 # ============================================
 
 class NovaBot:
@@ -436,8 +443,7 @@ class NovaBot:
     
     def load_conversation_history(self):
         """Load conversation history from database"""
-        # ✅ LIMIT TO LAST 10 MESSAGES FOR SPEED
-        messages = self.db.get_messages(self.conversation_id, limit=10)
+        messages = self.db.get_messages(self.conversation_id, limit=20)
         self.conversation_history = []
         
         if not messages:
@@ -488,14 +494,13 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         for msg in messages:
             if msg['role'] == 'user':
                 content = msg['content']
-                # Clean and shorten
                 if len(content) <= 30:
                     return content
                 return content[:30] + "..."
         return "New Conversation"
     
     def get_response(self, user_input: str) -> str:
-        """Get streaming response from Ollama - OPTIMIZED FOR SPEED"""
+        """Get response using Groq API or fallback to Ollama"""
         # Check for special commands
         if user_input.lower().startswith('/search'):
             query = user_input[8:].strip()
@@ -511,48 +516,26 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             else:
                 return "Please provide code to execute. Example: /run print('Hello')"
         
-        import ollama
-        
         # Save user message
         self.db.save_message(self.conversation_id, "user", user_input)
         self.conversation_history.append({"role": "user", "content": user_input})
         
         try:
-            # ✅ OPTIMIZED: Use quantized model with speed options
-            stream = ollama.chat(
-                model='llama3.2:3b',  # ✅ Faster quantized model
-                messages=self.conversation_history,
-                stream=True,
-                options={
-                    'num_ctx': 4096,        # ✅ Smaller context window
-                    'num_predict': 512,     # ✅ Limit response length
-                    'temperature': 0.7,     # ✅ Balanced creativity
-                    'top_k': 40, 
-                    'top_p': 0.9, #limit choices for speed
-                }
-            )
-            
-            full_response = ""
-            for chunk in stream:
-                content = chunk['message']['content']
-                full_response += content
-            
-            # Save assistant response
-            self.db.save_message(self.conversation_id, "assistant", full_response)
-            self.conversation_history.append({"role": "assistant", "content": full_response})
-            
-            # ✅ Update conversation title based on content
-            conversations = self.db.get_conversations(self.user['id'])
-            if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
-                all_messages = self.db.get_messages(self.conversation_id)
-                title = self.generate_conversation_title(all_messages)
-                self.db.update_conversation_title(self.conversation_id, title)
-            
-            return full_response
-            
-        except Exception as e:
-            # ✅ Fallback to regular model if quantized fails
-            try:
+            # ✅ Try Groq API first
+            if GROQ_AVAILABLE and client:
+                print("🤖 Using Groq API...")
+                response = client.chat.completions.create(
+                    messages=self.conversation_history,
+                    model="llama-3.3-70b-versatile",  # You can change this
+                    temperature=0.7,
+                    max_tokens=512,
+                    top_p=0.9,
+                )
+                full_response = response.choices[0].message.content
+            else:
+                # ✅ Fallback to local Ollama
+                import ollama
+                print("🤖 Using Ollama (fallback)...")
                 stream = ollama.chat(
                     model='mistral:7b',
                     messages=self.conversation_history,
@@ -568,20 +551,23 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
                 for chunk in stream:
                     content = chunk['message']['content']
                     full_response += content
-                
-                self.db.save_message(self.conversation_id, "assistant", full_response)
-                self.conversation_history.append({"role": "assistant", "content": full_response})
-                
-                conversations = self.db.get_conversations(self.user['id'])
-                if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
-                    all_messages = self.db.get_messages(self.conversation_id)
-                    title = self.generate_conversation_title(all_messages)
-                    self.db.update_conversation_title(self.conversation_id, title)
-                
-                return full_response
-                
-            except Exception as e2:
-                return f"Error: {str(e2)}. Make sure Ollama is running: ollama serve"
+            
+            # Save assistant response
+            self.db.save_message(self.conversation_id, "assistant", full_response)
+            self.conversation_history.append({"role": "assistant", "content": full_response})
+            
+            # Update conversation title
+            conversations = self.db.get_conversations(self.user['id'])
+            if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
+                all_messages = self.db.get_messages(self.conversation_id)
+                title = self.generate_conversation_title(all_messages)
+                self.db.update_conversation_title(self.conversation_id, title)
+            
+            return full_response
+            
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            return f"Error: {str(e)}. Please check your API key or Ollama connection."
     
     def switch_conversation(self, conversation_id: int):
         """Switch to a different conversation"""
@@ -643,110 +629,3 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
     def get_stats(self) -> dict:
         """Get user statistics"""
         return self.db.get_stats(self.user['id'])
-
-# ============================================
-# TERMINAL UI (Optional)
-# ============================================
-
-if __name__ == "__main__":
-    import sys
-    
-    if HAS_RICH:
-        console = Console()
-    
-    print("\n🚀 Welcome to Nova AI!")
-    username = input("What's your name? ").strip() or "User"
-    
-    bot = NovaBot(username)
-    
-    print(f"\n👋 Welcome back, {username}!")
-    print(f"💬 Current conversation: {bot.conversation_id}")
-    print(f"🧠 Personality: {bot.personality}")
-    print("\nCommands:")
-    print("  /search <query>  - Search the web")
-    print("  /run <code>      - Execute Python code")
-    print("  /new             - New conversation")
-    print("  /list            - List conversations")
-    print("  /switch <id>     - Switch conversation")
-    print("  /delete <id>     - Delete conversation")
-    print("  /export <format> - Export conversation (txt, json, pdf)")
-    print("  /stats           - Show statistics")
-    print("  /exit            - Exit")
-    print()
-    
-    while True:
-        try:
-            user_input = input(f"\n[You] ").strip()
-            
-            if not user_input:
-                continue
-            
-            if user_input.lower() in ['/exit', '/quit']:
-                print("👋 Goodbye!")
-                break
-            
-            elif user_input == '/new':
-                conv_id = bot.create_new_conversation()
-                print(f"✅ New conversation created: {conv_id}")
-                continue
-            
-            elif user_input == '/list':
-                conversations = bot.get_conversations()
-                if HAS_RICH:
-                    table = Table(title="📚 Your Conversations")
-                    table.add_column("ID", style="cyan")
-                    table.add_column("Title", style="white")
-                    table.add_column("Updated", style="dim")
-                    for conv in conversations:
-                        table.add_row(
-                            str(conv['id']),
-                            conv['title'],
-                            conv['updated_at'][:16]
-                        )
-                    console.print(table)
-                else:
-                    for conv in conversations:
-                        print(f"  {conv['id']}: {conv['title']} ({conv['updated_at'][:16]})")
-                continue
-            
-            elif user_input.startswith('/switch '):
-                try:
-                    conv_id = int(user_input.split()[1])
-                    bot.switch_conversation(conv_id)
-                    print(f"✅ Switched to conversation: {conv_id}")
-                except:
-                    print("❌ Invalid conversation ID")
-                continue
-            
-            elif user_input.startswith('/delete '):
-                try:
-                    conv_id = int(user_input.split()[1])
-                    bot.delete_conversation(conv_id)
-                    print(f"✅ Deleted conversation: {conv_id}")
-                except:
-                    print("❌ Invalid conversation ID")
-                continue
-            
-            elif user_input.startswith('/export '):
-                format_type = user_input.split()[1] if len(user_input.split()) > 1 else 'txt'
-                result = bot.export_conversation(format_type)
-                print(f"✅ {result}")
-                continue
-            
-            elif user_input == '/stats':
-                stats = bot.get_stats()
-                print(f"📊 Statistics:")
-                print(f"  Total Messages: {stats['total_messages']}")
-                print(f"  Total Conversations: {stats['total_conversations']}")
-                continue
-            
-            response = bot.get_response(user_input)
-            print(f"\n[Nova] {response}")
-            
-        except KeyboardInterrupt:
-            print("\n👋 Goodbye!")
-            break
-        except Exception as e:
-            print(f"❌ Error: {e}")
-    
-    bot.db.close()

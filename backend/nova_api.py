@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NOVA API Server - Complete Backend API
+NOVA API Server - Complete Backend API with Groq Support
 """
 
 import os
@@ -62,6 +62,7 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# ✅ CORS for Vercel + Render
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -69,6 +70,9 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://*.vercel.app",
+        "https://*.render.com",
+        os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [],
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -301,7 +305,6 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
         print(f"Get conversations error: {e}")
         return {"success": False, "error": str(e)}
 
-# ✅ THIS IS THE MISSING ENDPOINT
 @app.post("/api/conversations")
 async def create_conversation(data: ConversationCreate, current_user: dict = Depends(get_current_user)):
     """Create a new conversation"""
@@ -405,11 +408,11 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 if __name__ == "__main__":
     print("""
     ╔═══════════════════════════════════════════════════════════╗
-    ║  🚀 NOVA API SERVER v2.0                                ║
+    ║  🚀 NOVA API SERVER v2.0 - WITH GROQ SUPPORT            ║
     ║  📡 API: http://localhost:8000                          ║
     ║  📚 Docs: http://localhost:8000/docs                    ║
     ║  🔐 Auth: JWT Authentication Ready                      ║
-    ║  🤖 Model: Mistral 7B                                   ║
+    ║  🤖 Model: Groq Llama (or fallback to Ollama)          ║
     ╚═══════════════════════════════════════════════════════════╝
     """)
     uvicorn.run(
