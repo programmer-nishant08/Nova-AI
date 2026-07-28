@@ -7,14 +7,9 @@ import MainLayout from './components/Layout/MainLayout';
 import Auth from './components/Auth/Auth';
 import Logo from './components/Common/Logo';
 
-// ============================================
-// APP CONTENT
-// ============================================
-
 function AppContent() {
   const { isAuthenticated, loading } = useAuth();
 
-  // ✅ Show loading screen with logo
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-cyber-dark">
@@ -27,25 +22,38 @@ function AppContent() {
     );
   }
 
-  // ✅ If not authenticated, show Auth page
-  if (!isAuthenticated) {
-    return <Auth />;
-  }
-
-  // ✅ If authenticated, show MainLayout with Chat
   return (
-    <ChatProvider>
-      <MainLayout />
-    </ChatProvider>
+    <Routes>
+      {/* ✅ Auth page - if authenticated, redirect to home */}
+      <Route 
+        path="/login" 
+        element={isAuthenticated ? <Navigate to="/" replace /> : <Auth />} 
+      />
+      
+      {/* ✅ Home page - if not authenticated, redirect to login */}
+      <Route 
+        path="/" 
+        element={
+          isAuthenticated ? (
+            <ChatProvider>
+              <MainLayout />
+            </ChatProvider>
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        } 
+      />
+      
+      {/* ✅ Catch all - redirect to home or login */}
+      <Route 
+        path="*" 
+        element={<Navigate to={isAuthenticated ? "/" : "/login"} replace />} 
+      />
+    </Routes>
   );
 }
 
-// ============================================
-// MAIN APP
-// ============================================
-
 function App() {
-
   return (
     <AuthProvider>
       <Router>
@@ -58,19 +66,6 @@ function App() {
               color: '#E2E8F0',
               border: '1px solid rgba(139, 92, 246, 0.2)',
               borderRadius: '12px',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-            },
-            success: {
-              iconTheme: {
-                primary: '#8B5CF6',
-                secondary: '#E2E8F0',
-              },
-            },
-            error: {
-              iconTheme: {
-                primary: '#EF4444',
-                secondary: '#E2E8F0',
-              },
             },
           }}
         />

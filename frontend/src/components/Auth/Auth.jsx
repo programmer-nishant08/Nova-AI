@@ -1,11 +1,22 @@
-import React, { useState } from 'react';
-import Logo from '../Common/Logo';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../hooks/useAuth';
 import Login from './Login';
 import Register from './Register';
+import Logo from '../Common/Logo';
 
 export default function Auth() {
   const [isLogin, setIsLogin] = useState(true);
+  const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+
+  // ✅ Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-cyber-dark p-4 relative overflow-hidden">
@@ -17,12 +28,9 @@ export default function Auth() {
         transition={{ duration: 0.5 }}
         className="w-full max-w-md relative z-10"
       >
-        <div className="flex flex-col items-center justify-center text-center mb-8">
-          <Logo size={94} showText={false} />
-             <span className="text-2xl font-bold bg-gradient-to-r from-cyber-purple via-cyber-cyan to-cyber-pink bg-clip-text text-transparent">
-        Nova AI
-      </span>
-
+        <div className="text-center mb-8">
+          <Logo size={64} className="mx-auto" showText={false} />
+          <h1 className="text-3xl font-bold mt-4 text-gradient">Nova AI</h1>
           <p className="text-cyber-text-dim mt-1 text-sm">Advanced Intelligent Assistant</p>
         </div>
 
