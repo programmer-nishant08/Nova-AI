@@ -55,9 +55,15 @@ except ImportError:
 
 # Initialize Groq client
 if GROQ_AVAILABLE:
-    client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    api_key = os.environ.get("GROQ_API_KEY")
+    if api_key:
+        client = groq.Groq(api_key=api_key)
+    else:
+        client = None
+        print("⚠️ GROQ_API_KEY not set. Falling back to Ollama.")
 else:
     client = None
+    print("⚠️ Groq library not installed. Falling back to Ollama.")
 
 # ============================================
 # DATABASE
