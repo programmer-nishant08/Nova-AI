@@ -17,4 +17,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
   },
+  css: {
+    postcss: './postcss.config.cjs',  // ✅ Point to the .cjs file
+  },
 })
