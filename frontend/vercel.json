@@ -1,6 +1,11 @@
 {
-  "buildCommand": "npm run vercel-build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": null,
-  "installCommand": "npm install"
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
