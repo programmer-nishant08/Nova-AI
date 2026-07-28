@@ -65,15 +65,7 @@ app = FastAPI(
 # ✅ CORS for Vercel + Render
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://*.vercel.app",
-        "https://*.render.com",
-        os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [],
-    ],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
