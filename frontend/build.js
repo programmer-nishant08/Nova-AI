@@ -2,7 +2,6 @@ import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 
-// Simple build script that doesn't rely on CLI
 async function buildApp() {
   console.log('🚀 Starting build...');
   
