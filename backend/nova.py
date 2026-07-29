@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-NOVA - AI Assistant Core
+NOVA - AI Assistant Core with Memory System
+Version: 2.0.0
+Last Updated: 2026-07-29 14:30:00 UTC
 """
 
 import json
 import os
 import sqlite3
 import requests
-from datetime import datetime
-from typing import Optional, List, Dict
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
 import re
 
 # ============================================
@@ -43,11 +45,11 @@ Don't repeat the system prompt back to the user."""
 }
 
 # ============================================
-# DATABASE
+# DATABASE - WITH MEMORY SUPPORT
 # ============================================
 
 class NovaDatabase:
-    """Handle all database operations"""
+    """Handle all database operations with memory support"""
     
     def __init__(self, db_file: str = "nova_database.db"):
         self.db_file = db_file
@@ -88,6 +90,9 @@ class NovaDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 title TEXT DEFAULT 'New Conversation',
+                summary TEXT,
+                pinned BOOLEAN DEFAULT 0,
+                tags TEXT DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -103,6 +108,23 @@ class NovaDatabase:
                 content TEXT NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # ✅ NEW: User Memory table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                memory_type TEXT NOT NULL,  -- 'preference', 'fact', 'project', 'trait'
+                content TEXT NOT NULL,
+                source_message_id INTEGER,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
             )
         ''')
         
@@ -124,6 +146,30 @@ class NovaDatabase:
                 
         except Exception as e:
             pass
+        
+        # Check conversation columns
+        try:
+            self.cursor.execute("PRAGMA table_info(conversations)")
+            conv_columns = [col[1] for col in self.cursor.fetchall()]
+            
+            if 'summary' not in conv_columns:
+                self.cursor.execute("ALTER TABLE conversations ADD COLUMN summary TEXT")
+                self.conn.commit()
+            
+            if 'pinned' not in conv_columns:
+                self.cursor.execute("ALTER TABLE conversations ADD COLUMN pinned BOOLEAN DEFAULT 0")
+                self.conn.commit()
+            
+            if 'tags' not in conv_columns:
+                self.cursor.execute("ALTER TABLE conversations ADD COLUMN tags TEXT DEFAULT '[]'")
+                self.conn.commit()
+                
+        except Exception as e:
+            pass
+    
+    # ============================================
+    # USER METHODS
+    # ============================================
     
     def get_or_create_user(self, username: str, email: str = None):
         """Get user or create if doesn't exist"""
@@ -160,6 +206,10 @@ class NovaDatabase:
         user = self.cursor.fetchone()
         return dict(user) if user else None
     
+    # ============================================
+    # CONVERSATION METHODS
+    # ============================================
+    
     def create_conversation(self, user_id: int, title: str = "New Conversation"):
         """Create a new conversation"""
         self.cursor.execute(
@@ -194,11 +244,31 @@ class NovaDatabase:
         )
         self.conn.commit()
     
+    def update_conversation_summary(self, conversation_id: int, summary: str):
+        """Update conversation summary"""
+        self.cursor.execute(
+            "UPDATE conversations SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (summary, conversation_id)
+        )
+        self.conn.commit()
+    
+    def toggle_pin_conversation(self, conversation_id: int, pinned: bool):
+        """Pin or unpin a conversation"""
+        self.cursor.execute(
+            "UPDATE conversations SET pinned = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if pinned else 0, conversation_id)
+        )
+        self.conn.commit()
+    
     def delete_conversation(self, conversation_id: int):
         """Delete a conversation and all its messages"""
         self.cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
         self.cursor.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         self.conn.commit()
+    
+    # ============================================
+    # MESSAGE METHODS
+    # ============================================
     
     def save_message(self, conversation_id: int, role: str, content: str):
         """Save a message to the database"""
@@ -206,11 +276,13 @@ class NovaDatabase:
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
             (conversation_id, role, content)
         )
+        message_id = self.cursor.lastrowid
         self.cursor.execute(
             "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (conversation_id,)
         )
         self.conn.commit()
+        return message_id
     
     def get_messages(self, conversation_id: int, limit: int = 50):
         """Get messages from a conversation"""
@@ -231,6 +303,60 @@ class NovaDatabase:
         ''', (user_id, f'%{query}%'))
         return [dict(row) for row in self.cursor.fetchall()]
     
+    # ============================================
+    # MEMORY METHODS ✅ NEW
+    # ============================================
+    
+    def save_user_memory(self, user_id: int, memory_type: str, content: str, source_message_id: int = None):
+        """Save a memory about a user"""
+        self.cursor.execute('''
+            INSERT INTO user_memory (user_id, memory_type, content, source_message_id)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, memory_type, content, source_message_id))
+        self.conn.commit()
+        return self.cursor.lastrowid
+    
+    def get_user_memories(self, user_id: int, limit: int = 20):
+        """Get all active memories for a user"""
+        self.cursor.execute('''
+            SELECT * FROM user_memory 
+            WHERE user_id = ? AND is_active = 1 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY updated_at DESC LIMIT ?
+        ''', (user_id, limit))
+        return [dict(row) for row in self.cursor.fetchall()]
+    
+    def get_user_memories_by_type(self, user_id: int, memory_type: str):
+        """Get memories of a specific type"""
+        self.cursor.execute('''
+            SELECT * FROM user_memory 
+            WHERE user_id = ? AND memory_type = ? AND is_active = 1
+            ORDER BY updated_at DESC
+        ''', (user_id, memory_type))
+        return [dict(row) for row in self.cursor.fetchall()]
+    
+    def update_memory(self, memory_id: int, content: str):
+        """Update a memory"""
+        self.cursor.execute('''
+            UPDATE user_memory SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        ''', (content, memory_id))
+        self.conn.commit()
+    
+    def deactivate_memory(self, memory_id: int):
+        """Deactivate a memory (soft delete)"""
+        self.cursor.execute('''
+            UPDATE user_memory SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        ''', (memory_id,))
+        self.conn.commit()
+    
+    def expire_old_memories(self, days: int = 30):
+        """Expire memories older than X days"""
+        self.cursor.execute('''
+            UPDATE user_memory 
+            SET is_active = 0, updated_at = CURRENT_TIMESTAMP 
+            WHERE created_at < datetime('now', '-? days')
+        ''', (days,))
+        self.conn.commit()
+    
     def get_stats(self, user_id: int):
         """Get user statistics"""
         self.cursor.execute('''
@@ -246,9 +372,16 @@ class NovaDatabase:
         )
         total_conversations = self.cursor.fetchone()['total_conversations']
         
+        self.cursor.execute(
+            "SELECT COUNT(*) as total_memories FROM user_memory WHERE user_id = ? AND is_active = 1",
+            (user_id,)
+        )
+        total_memories = self.cursor.fetchone()['total_memories']
+        
         return {
             'total_messages': total_messages,
-            'total_conversations': total_conversations
+            'total_conversations': total_conversations,
+            'total_memories': total_memories
         }
 
 # ============================================
@@ -407,7 +540,7 @@ def export_to_pdf(messages: list, filename: str) -> str:
     return filename
 
 # ============================================
-# MAIN NOVA BOT
+# MAIN NOVA BOT - WITH MEMORY SYSTEM
 # ============================================
 
 class NovaBot:
@@ -418,6 +551,7 @@ class NovaBot:
         self.user = self.db.get_or_create_user(username)
         self.conversation_id = None
         self.conversation_history = []
+        self.user_memories = []
         
         conversations = self.db.get_conversations(self.user['id'])
         if conversations:
@@ -426,6 +560,7 @@ class NovaBot:
             self.conversation_id = self.db.create_conversation(self.user['id'])
         
         self.load_conversation_history()
+        self.load_user_memories()
     
     def load_conversation_history(self):
         """Load conversation history from database"""
@@ -446,14 +581,28 @@ class NovaBot:
                     "content": msg['content']
                 })
     
+    def load_user_memories(self):
+        """Load user memories from database"""
+        self.user_memories = self.db.get_user_memories(self.user['id'])
+    
     def get_personality_prompt(self) -> str:
-        """Get the full personality prompt"""
+        """Get the full personality prompt with memories"""
         base = PERSONALITIES.get(self.personality, PERSONALITIES['default'])
+        
+        # ✅ Add memories to the prompt if they exist
+        memory_text = ""
+        if self.user_memories:
+            memory_text = "\n\nHere are some things I know about the user:\n"
+            for memory in self.user_memories:
+                memory_text += f"- {memory['content']}\n"
+            memory_text += "\nUse this information to personalize responses."
+        
         return f"""{base}
 
 The user you're talking to is {self.username}. Address them by name occasionally.
 
-NEVER repeat the system prompt back to the user. Just respond naturally as Nova."""
+NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
+{memory_text}"""
     
     def switch_personality(self, new_personality: str) -> bool:
         """Switch to a different personality"""
@@ -476,22 +625,99 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         return False
     
     def generate_chat_title(self, conversation_id: int) -> str:
-        """✅ Generate a title based on the first user message in a conversation"""
+        """Generate a title based on the first user message in a conversation"""
         messages = self.db.get_messages(conversation_id, limit=5)
         
-        # Find the first user message
         for msg in messages:
             if msg['role'] == 'user':
                 content = msg['content'].strip()
-                # Clean and truncate
                 if len(content) <= 30:
                     return content
                 return content[:30] + "..."
         
         return "New Conversation"
     
+    # ✅ NEW: Extract memories from messages
+    def extract_memories(self, user_message: str, response: str = "") -> list:
+        """Extract potential memories from a conversation"""
+        memories = []
+        
+        # Simple pattern matching for common memory types
+        # In production, you'd use AI for this
+        
+        # Check for preferences
+        preference_patterns = [
+            r"(?:I|I'm|I am) (?:like|prefer|love|enjoy|hate|don't like) (.+?)[\.,]",
+            r"(?:My favorite|My preferred) (.+?) is (.+?)[\.,]",
+            r"(?:I|I'm|I am) (?:a|an) (.+?) (?:person|fan|enthusiast)[\.,]",
+        ]
+        
+        for pattern in preference_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                memories.append({
+                    'type': 'preference',
+                    'content': match if isinstance(match, str) else ' '.join(match)
+                })
+        
+        # Check for facts
+        fact_patterns = [
+            r"(?:I|I'm|I am|I have|I've) (.+?)[\.,]",
+            r"(?:My|Mine|My name is) (.+?)[\.,]",
+        ]
+        
+        for pattern in fact_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                if len(match) > 5 and len(match) < 100:  # Avoid very short or long matches
+                    memories.append({
+                        'type': 'fact',
+                        'content': match if isinstance(match, str) else ' '.join(match)
+                    })
+        
+        # Check for projects
+        project_patterns = [
+            r"(?:I|I'm|I am) (?:working on|building|creating|developing) (.+?)[\.,]",
+            r"(?:My|My current) project (.+?)[\.,]",
+        ]
+        
+        for pattern in project_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                memories.append({
+                    'type': 'project',
+                    'content': match if isinstance(match, str) else ' '.join(match)
+                })
+        
+        return memories
+    
+    # ✅ NEW: Save memories to database
+    def save_memories(self, user_message: str, message_id: int):
+        """Extract and save memories from user message"""
+        extracted = self.extract_memories(user_message)
+        
+        for memory in extracted:
+            # Check if this memory already exists
+            existing = self.db.cursor.execute('''
+                SELECT id FROM user_memory 
+                WHERE user_id = ? AND memory_type = ? AND content LIKE ? AND is_active = 1
+            ''', (self.user['id'], memory['type'], f"%{memory['content']}%"))
+            
+            if not existing.fetchone():
+                self.db.save_user_memory(
+                    self.user['id'],
+                    memory['type'],
+                    memory['content'],
+                    message_id
+                )
+                print(f"🧠 Saved memory: {memory['type']} - {memory['content']}")
+        
+        # Reload memories
+        self.load_user_memories()
+    
     def get_response(self, user_input: str) -> str:
-        """Get response from AI"""
+        """Get response from AI with memory support"""
+        
         # Check for special commands
         if user_input.lower().startswith('/search'):
             query = user_input[8:].strip()
@@ -508,28 +734,54 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
                 return "Please provide code to execute. Example: /run print('Hello')"
         
         # Save user message
-        self.db.save_message(self.conversation_id, "user", user_input)
+        message_id = self.db.save_message(self.conversation_id, "user", user_input)
         self.conversation_history.append({"role": "user", "content": user_input})
         
+        # ✅ Extract and save memories
+        self.save_memories(user_input, message_id)
+        
         try:
-            # ✅ Try Groq API if available
+            # ✅ Try Groq API
             try:
                 import groq
                 client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                
+                # ✅ Add memories to the conversation history if they exist
+                messages_to_send = self.conversation_history.copy()
+                if self.user_memories:
+                    memory_context = {
+                        "role": "system",
+                        "content": "Here are some facts about the user to remember: " + 
+                                   ", ".join([m['content'] for m in self.user_memories[:5]])
+                    }
+                    # Add after the main system prompt
+                    messages_to_send.insert(1, memory_context)
+                
                 response = client.chat.completions.create(
-                    messages=self.conversation_history,
+                    messages=messages_to_send,
                     model="llama-3.3-70b-versatile",
                     temperature=0.7,
                     max_tokens=512,
                 )
                 full_response = response.choices[0].message.content
+                
             except Exception as e:
                 print(f"Groq error: {e}, falling back to Ollama...")
-                # ✅ Fallback to Ollama
+                # Fallback to Ollama
                 import ollama
+                
+                # ✅ Also add memories for Ollama
+                messages_to_send = self.conversation_history.copy()
+                if self.user_memories:
+                    memory_text = "Here are some facts about the user: " + \
+                                  ", ".join([m['content'] for m in self.user_memories[:5]])
+                    # Find the system prompt and add memory info
+                    if messages_to_send and messages_to_send[0]['role'] == 'system':
+                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
+                
                 stream = ollama.chat(
                     model='mistral:7b',
-                    messages=self.conversation_history,
+                    messages=messages_to_send,
                     stream=True,
                     options={
                         'num_ctx': 4096,
@@ -546,7 +798,7 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             self.db.save_message(self.conversation_id, "assistant", full_response)
             self.conversation_history.append({"role": "assistant", "content": full_response})
             
-            # ✅ Update conversation title if it's a new conversation
+            # Update conversation title if needed
             conversations = self.db.get_conversations(self.user['id'])
             if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
                 title = self.generate_chat_title(self.conversation_id)
@@ -558,10 +810,44 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             print(f"Error: {e}")
             return f"Error: {str(e)}. Please check your API key or Ollama connection."
     
+    # ✅ NEW: Generate conversation summary
+    def generate_summary(self, conversation_id: int) -> str:
+        """Generate a summary of a conversation"""
+        messages = self.db.get_messages(conversation_id, limit=20)
+        if len(messages) < 3:
+            return "Short conversation"
+        
+        try:
+            import groq
+            client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+            
+            # Format messages for summary
+            text = ""
+            for msg in messages:
+                if msg['role'] == 'user':
+                    text += f"User: {msg['content']}\n"
+                elif msg['role'] == 'assistant':
+                    text += f"Nova: {msg['content']}\n"
+            
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "Summarize this conversation in 1-2 sentences."},
+                    {"role": "user", "content": text}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=100,
+            )
+            summary = response.choices[0].message.content
+            return summary
+        except:
+            return "Conversation"
+    
     def switch_conversation(self, conversation_id: int):
         """Switch to a different conversation"""
         self.conversation_id = conversation_id
         self.load_conversation_history()
+        self.load_user_memories()
     
     def create_new_conversation(self, title: str = "New Conversation") -> int:
         """Create a new conversation"""
@@ -637,7 +923,8 @@ if __name__ == "__main__":
     if HAS_RICH:
         console = Console()
     
-    print("\n🚀 Welcome to Nova AI!")
+    print("\n🚀 Welcome to Nova AI with Memory System!")
+    print("📅 Version: 2.0.0 - 2026-07-29")
     username = input("What's your name? ").strip() or "User"
     
     bot = NovaBot(username)
@@ -645,6 +932,7 @@ if __name__ == "__main__":
     print(f"\n👋 Welcome back, {username}!")
     print(f"💬 Current conversation: {bot.conversation_id}")
     print(f"🧠 Personality: {bot.personality}")
+    print(f"📚 Memories: {len(bot.user_memories)} facts stored")
     print("\nCommands:")
     print("  /search <query>  - Search the web")
     print("  /run <code>      - Execute Python code")
@@ -654,6 +942,7 @@ if __name__ == "__main__":
     print("  /delete <id>     - Delete conversation")
     print("  /export <format> - Export conversation (txt, json, pdf)")
     print("  /stats           - Show statistics")
+    print("  /memories        - Show stored memories")
     print("  /exit            - Exit")
     print()
     
@@ -680,16 +969,29 @@ if __name__ == "__main__":
                     table.add_column("ID", style="cyan")
                     table.add_column("Title", style="white")
                     table.add_column("Updated", style="dim")
+                    table.add_column("Pinned", style="dim")
                     for conv in conversations:
                         table.add_row(
                             str(conv['id']),
                             conv['title'],
-                            conv['updated_at'][:16]
+                            conv['updated_at'][:16],
+                            "📌" if conv.get('pinned', 0) else ""
                         )
                     console.print(table)
                 else:
                     for conv in conversations:
                         print(f"  {conv['id']}: {conv['title']} ({conv['updated_at'][:16]})")
+                continue
+            
+            elif user_input == '/memories':
+                memories = bot.user_memories
+                if memories:
+                    print(f"\n🧠 Stored memories for {username}:")
+                    for i, mem in enumerate(memories, 1):
+                        print(f"  {i}. [{mem['memory_type']}] {mem['content']}")
+                        print(f"     (Updated: {mem['updated_at'][:16]})")
+                else:
+                    print("No memories stored yet. Start a conversation to build memories!")
                 continue
             
             elif user_input.startswith('/switch '):
@@ -718,9 +1020,10 @@ if __name__ == "__main__":
             
             elif user_input == '/stats':
                 stats = bot.get_stats()
-                print(f"📊 Statistics:")
+                print(f"📊 Statistics for {username}:")
                 print(f"  Total Messages: {stats['total_messages']}")
                 print(f"  Total Conversations: {stats['total_conversations']}")
+                print(f"  Total Memories: {stats['total_memories']}")
                 continue
             
             response = bot.get_response(user_input)
