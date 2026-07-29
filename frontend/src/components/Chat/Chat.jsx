@@ -20,7 +20,6 @@ export default function Chat() {
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     if (messagesEndRef.current) {
       const container = messagesEndRef.current.parentElement;
@@ -43,12 +42,11 @@ export default function Chat() {
         conversationId={currentConversation}
       />
 
-      {/* Messages Container */}
       <div 
         ref={chatContainerRef}
         className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-4 relative z-10"
         style={{ 
-          maxHeight: 'calc(100vh - 180px)',
+          maxHeight: 'calc(100vh - 200px)',
           paddingTop: '16px'
         }}
       >
@@ -77,7 +75,7 @@ export default function Chat() {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-cyber-surface border border-cyber-border rounded-2xl px-4 py-3">
+            <div className="bg-cyber-surface border border-cyber-border/20 rounded-2xl px-4 py-3">
               <div className="flex gap-1">
                 <span className="typing-dot" />
                 <span className="typing-dot" style={{ animationDelay: '0.2s' }} />
@@ -88,11 +86,9 @@ export default function Chat() {
           </div>
         )}
 
-        {/* Invisible element to scroll to */}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Message Input - Fixed at bottom */}
       <div className="flex-shrink-0">
         <MessageInput onSend={sendMessage} disabled={loading} />
       </div>

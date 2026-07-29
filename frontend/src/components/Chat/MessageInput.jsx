@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { PaperAirplaneIcon, MicrophoneIcon, PaperClipIcon } from '@heroicons/react/24/outline';
+import QuickPrompts from '../QuickPrompts/QuickPrompts';
 
 export default function MessageInput({ onSend, disabled }) {
   const [message, setMessage] = useState('');
@@ -19,11 +20,14 @@ export default function MessageInput({ onSend, disabled }) {
     if (message.trim() && !disabled) {
       onSend(message);
       setMessage('');
-      // Reset height after sending
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     }
+  };
+
+  const handleQuickPrompt = (prompt) => {
+    onSend(prompt);
   };
 
   const handleKeyDown = (e) => {
@@ -34,14 +38,18 @@ export default function MessageInput({ onSend, disabled }) {
   };
 
   return (
-    <div className="border-t border-cyber-border p-4 bg-cyber-surface/50 backdrop-blur-sm sticky bottom-0 z-20">
-      <form onSubmit={handleSubmit} className="flex items-end gap-3 max-w-4xl mx-auto">
+    <div className="border-t border-cyber-border/20 bg-cyber-surface/30 backdrop-blur-sm">
+      {/* Quick Prompts */}
+      <QuickPrompts onSelect={handleQuickPrompt} />
+
+      {/* Input Area */}
+      <form onSubmit={handleSubmit} className="flex items-end gap-3 max-w-4xl mx-auto px-4 py-3">
         <div className="flex-1 relative">
           <div className={`absolute left-3 bottom-3 flex items-center gap-1 transition-opacity duration-200 ${
             isFocused || message ? 'opacity-0' : 'opacity-100'
           }`}>
             <span className="text-xs text-cyber-text-dim/30">⌘</span>
-            <span className="text-xs text-cyber-text-dim/20">Type a message...</span>
+            <span className="text-xs text-cyber-text-dim/20">Message Nova...</span>
           </div>
           <textarea
             ref={textareaRef}
@@ -52,7 +60,7 @@ export default function MessageInput({ onSend, disabled }) {
             onBlur={() => setIsFocused(false)}
             placeholder=""
             rows={1}
-            className="w-full bg-cyber-dark/50 border border-cyber-border rounded-2xl px-4 py-3 text-cyber-text placeholder-transparent focus:outline-none focus:border-cyber-purple focus:ring-1 focus:ring-cyber-purple transition resize-none min-h-[52px] max-h-[120px]"
+            className="w-full bg-cyber-dark/50 border border-cyber-border/20 rounded-2xl px-4 py-3 text-cyber-text placeholder-transparent focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/30 transition resize-none min-h-[52px] max-h-[120px]"
             disabled={disabled}
           />
         </div>
@@ -75,7 +83,7 @@ export default function MessageInput({ onSend, disabled }) {
             whileTap={{ scale: 0.95 }}
             type="submit"
             disabled={!message.trim() || disabled}
-            className="bg-gradient-primary text-white p-3 rounded-xl hover:shadow-glow-purple transition-all duration-300 disabled:opacity-40 disabled:hover:shadow-none disabled:cursor-not-allowed"
+            className="bg-gradient-to-r from-purple-500 to-cyan-500 text-white p-3 rounded-xl hover:shadow-glow-purple transition-all duration-300 disabled:opacity-40 disabled:hover:shadow-none disabled:cursor-not-allowed"
           >
             <PaperAirplaneIcon className="w-5 h-5" />
           </motion.button>
