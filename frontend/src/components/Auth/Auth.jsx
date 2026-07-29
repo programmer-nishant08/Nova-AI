@@ -28,7 +28,7 @@ export default function Auth() {
         transition={{ duration: 0.5 }}
         className="w-full max-w-md relative z-10"
       >
-        <div className="text-center mb-8">
+        <div className="flex flex-col items-center justify-center text-center mb-8">
           <Logo size={64} className="mx-auto" showText={false} />
           <h1 className="text-3xl font-bold mt-4 text-gradient">Nova AI</h1>
           <p className="text-cyber-text-dim mt-1 text-sm">Advanced Intelligent Assistant</p>

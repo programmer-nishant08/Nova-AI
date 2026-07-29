@@ -70,6 +70,7 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
             <span className="text-xs text-cyber-text-dim bg-cyber-dark/50 px-2 py-0.5 rounded-full">AI</span>
           </div>
           
+          {/* Close button - mobile only */}
           <button
             onClick={() => setIsMobileOpen(false)}
             className="md:hidden p-1 rounded-lg hover:bg-cyber-dark/50 text-cyber-text-dim hover:text-cyber-text transition-colors"
@@ -174,10 +175,21 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
 
   return (
     <>
+      {/* Desktop Sidebar */}
       <div className="hidden md:flex w-72 h-full bg-cyber-surface border-r border-cyber-border flex-col flex-shrink-0">
         {sidebarContent}
       </div>
 
+      {/* Mobile Hamburger Button */}
+      <button
+        onClick={() => setIsMobileOpen(true)}
+        className="md:hidden fixed top-4 left-4 z-50 p-2.5 bg-cyber-surface border border-cyber-border rounded-xl text-cyber-text hover:bg-cyber-dark/50 transition-colors shadow-glow-purple"
+        aria-label="Open menu"
+      >
+        <Bars3Icon className="w-6 h-6" />
+      </button>
+
+      {/* Mobile Sidebar Overlay */}
       {isMobileOpen && (
         <>
           <div
