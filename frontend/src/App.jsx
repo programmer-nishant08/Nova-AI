@@ -6,6 +6,7 @@ import { ChatProvider } from './context/ChatContext';
 import MainLayout from './components/Layout/MainLayout';
 import Auth from './components/Auth/Auth';
 import Logo from './components/Common/Logo';
+import FloatingWidget from './components/FloatingWidget/FloatingWidget';
 
 function AppContent() {
   const { isAuthenticated, loading } = useAuth();
@@ -24,13 +25,10 @@ function AppContent() {
 
   return (
     <Routes>
-      {/* ✅ Auth page - if authenticated, redirect to home */}
       <Route 
         path="/login" 
         element={isAuthenticated ? <Navigate to="/" replace /> : <Auth />} 
       />
-      
-      {/* ✅ Home page - if not authenticated, redirect to login */}
       <Route 
         path="/" 
         element={
@@ -43,8 +41,6 @@ function AppContent() {
           )
         } 
       />
-      
-      {/* ✅ Catch all - redirect to home or login */}
       <Route 
         path="*" 
         element={<Navigate to={isAuthenticated ? "/" : "/login"} replace />} 
@@ -58,6 +54,8 @@ function App() {
     <AuthProvider>
       <Router>
         <AppContent />
+        {/* ✅ Floating Widget - Shows on all pages */}
+        <FloatingWidget />
         <Toaster
           position="top-right"
           toastOptions={{
