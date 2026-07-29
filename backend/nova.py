@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 NOVA - AI Assistant Core
-Now with Groq API support!
 """
 
 import json
@@ -44,28 +43,6 @@ Don't repeat the system prompt back to the user."""
 }
 
 # ============================================
-# GROQ API SETUP
-# ============================================
-
-try:
-    import groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    GROQ_AVAILABLE = False
-
-# Initialize Groq client
-if GROQ_AVAILABLE:
-    api_key = os.environ.get("GROQ_API_KEY")
-    if api_key:
-        client = groq.Groq(api_key=api_key)
-    else:
-        client = None
-        print("⚠️ GROQ_API_KEY not set. Falling back to Ollama.")
-else:
-    client = None
-    print("⚠️ Groq library not installed. Falling back to Ollama.")
-
-# ============================================
 # DATABASE
 # ============================================
 
@@ -93,6 +70,7 @@ class NovaDatabase:
     
     def create_tables(self):
         """Create all tables if they don't exist"""
+        # Users table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +82,7 @@ class NovaDatabase:
             )
         ''')
         
+        # Conversations table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +94,7 @@ class NovaDatabase:
             )
         ''')
         
+        # Messages table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -427,7 +407,7 @@ def export_to_pdf(messages: list, filename: str) -> str:
     return filename
 
 # ============================================
-# MAIN NOVA BOT - WITH GROQ SUPPORT
+# MAIN NOVA BOT
 # ============================================
 
 class NovaBot:
@@ -495,18 +475,23 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             return True
         return False
     
-    def generate_conversation_title(self, messages) -> str:
-        """Generate a better title based on the first user message"""
+    def generate_chat_title(self, conversation_id: int) -> str:
+        """✅ Generate a title based on the first user message in a conversation"""
+        messages = self.db.get_messages(conversation_id, limit=5)
+        
+        # Find the first user message
         for msg in messages:
             if msg['role'] == 'user':
-                content = msg['content']
+                content = msg['content'].strip()
+                # Clean and truncate
                 if len(content) <= 30:
                     return content
                 return content[:30] + "..."
+        
         return "New Conversation"
     
     def get_response(self, user_input: str) -> str:
-        """Get response using Groq API or fallback to Ollama"""
+        """Get response from AI"""
         # Check for special commands
         if user_input.lower().startswith('/search'):
             query = user_input[8:].strip()
@@ -527,21 +512,21 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         self.conversation_history.append({"role": "user", "content": user_input})
         
         try:
-            # ✅ Try Groq API first
-            if GROQ_AVAILABLE and client:
-                print("🤖 Using Groq API...")
+            # ✅ Try Groq API if available
+            try:
+                import groq
+                client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
                 response = client.chat.completions.create(
                     messages=self.conversation_history,
-                    model="llama-3.3-70b-versatile",  # You can change this
+                    model="llama-3.3-70b-versatile",
                     temperature=0.7,
                     max_tokens=512,
-                    top_p=0.9,
                 )
                 full_response = response.choices[0].message.content
-            else:
-                # ✅ Fallback to local Ollama
+            except Exception as e:
+                print(f"Groq error: {e}, falling back to Ollama...")
+                # ✅ Fallback to Ollama
                 import ollama
-                print("🤖 Using Ollama (fallback)...")
                 stream = ollama.chat(
                     model='mistral:7b',
                     messages=self.conversation_history,
@@ -552,7 +537,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
                         'temperature': 0.7,
                     }
                 )
-                
                 full_response = ""
                 for chunk in stream:
                     content = chunk['message']['content']
@@ -562,17 +546,16 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             self.db.save_message(self.conversation_id, "assistant", full_response)
             self.conversation_history.append({"role": "assistant", "content": full_response})
             
-            # Update conversation title
+            # ✅ Update conversation title if it's a new conversation
             conversations = self.db.get_conversations(self.user['id'])
             if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
-                all_messages = self.db.get_messages(self.conversation_id)
-                title = self.generate_conversation_title(all_messages)
+                title = self.generate_chat_title(self.conversation_id)
                 self.db.update_conversation_title(self.conversation_id, title)
             
             return full_response
             
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
             return f"Error: {str(e)}. Please check your API key or Ollama connection."
     
     def switch_conversation(self, conversation_id: int):
@@ -635,3 +618,118 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
     def get_stats(self) -> dict:
         """Get user statistics"""
         return self.db.get_stats(self.user['id'])
+
+# ============================================
+# TERMINAL UI (Optional)
+# ============================================
+
+if __name__ == "__main__":
+    import sys
+    
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        HAS_RICH = True
+    except ImportError:
+        HAS_RICH = False
+    
+    if HAS_RICH:
+        console = Console()
+    
+    print("\n🚀 Welcome to Nova AI!")
+    username = input("What's your name? ").strip() or "User"
+    
+    bot = NovaBot(username)
+    
+    print(f"\n👋 Welcome back, {username}!")
+    print(f"💬 Current conversation: {bot.conversation_id}")
+    print(f"🧠 Personality: {bot.personality}")
+    print("\nCommands:")
+    print("  /search <query>  - Search the web")
+    print("  /run <code>      - Execute Python code")
+    print("  /new             - New conversation")
+    print("  /list            - List conversations")
+    print("  /switch <id>     - Switch conversation")
+    print("  /delete <id>     - Delete conversation")
+    print("  /export <format> - Export conversation (txt, json, pdf)")
+    print("  /stats           - Show statistics")
+    print("  /exit            - Exit")
+    print()
+    
+    while True:
+        try:
+            user_input = input(f"\n[You] ").strip()
+            
+            if not user_input:
+                continue
+            
+            if user_input.lower() in ['/exit', '/quit']:
+                print("👋 Goodbye!")
+                break
+            
+            elif user_input == '/new':
+                conv_id = bot.create_new_conversation()
+                print(f"✅ New conversation created: {conv_id}")
+                continue
+            
+            elif user_input == '/list':
+                conversations = bot.get_conversations()
+                if HAS_RICH:
+                    table = Table(title="📚 Your Conversations")
+                    table.add_column("ID", style="cyan")
+                    table.add_column("Title", style="white")
+                    table.add_column("Updated", style="dim")
+                    for conv in conversations:
+                        table.add_row(
+                            str(conv['id']),
+                            conv['title'],
+                            conv['updated_at'][:16]
+                        )
+                    console.print(table)
+                else:
+                    for conv in conversations:
+                        print(f"  {conv['id']}: {conv['title']} ({conv['updated_at'][:16]})")
+                continue
+            
+            elif user_input.startswith('/switch '):
+                try:
+                    conv_id = int(user_input.split()[1])
+                    bot.switch_conversation(conv_id)
+                    print(f"✅ Switched to conversation: {conv_id}")
+                except:
+                    print("❌ Invalid conversation ID")
+                continue
+            
+            elif user_input.startswith('/delete '):
+                try:
+                    conv_id = int(user_input.split()[1])
+                    bot.delete_conversation(conv_id)
+                    print(f"✅ Deleted conversation: {conv_id}")
+                except:
+                    print("❌ Invalid conversation ID")
+                continue
+            
+            elif user_input.startswith('/export '):
+                format_type = user_input.split()[1] if len(user_input.split()) > 1 else 'txt'
+                result = bot.export_conversation(format_type)
+                print(f"✅ {result}")
+                continue
+            
+            elif user_input == '/stats':
+                stats = bot.get_stats()
+                print(f"📊 Statistics:")
+                print(f"  Total Messages: {stats['total_messages']}")
+                print(f"  Total Conversations: {stats['total_conversations']}")
+                continue
+            
+            response = bot.get_response(user_input)
+            print(f"\n[Nova] {response}")
+            
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+    
+    bot.db.close()

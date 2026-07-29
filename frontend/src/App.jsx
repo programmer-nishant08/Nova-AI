@@ -10,17 +10,17 @@ import Logo from './components/Common/Logo';
 function AppContent() {
   const { isAuthenticated, loading } = useAuth();
 
- if (loading) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-cyber-dark">
-      <div className="flex flex-col items-center gap-6">
-        <Logo size={64} showText={false} />
-        <div className="w-12 h-12 border-4 border-cyber-purple border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-cyber-text-dim text-sm animate-pulse">Loading Nova...</p>
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-cyber-dark">
+        <div className="flex flex-col items-center gap-6">
+          <Logo size={64} showText={false} />
+          <div className="w-12 h-12 border-4 border-cyber-purple border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-cyber-text-dim text-sm animate-pulse">Loading Nova...</p>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
   return (
     <Routes>
@@ -51,7 +51,8 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <Router>
+      {/* ✅ Add future flags to fix warnings */}
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AppContent />
         <Toaster
           position="top-right"

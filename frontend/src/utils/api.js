@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Use environment variable for API URL
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+// ✅ Use the environment variable WITHOUT /api at the end
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -28,7 +28,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('nova_token');
       localStorage.removeItem('nova_user');
-      window.location.href = '/';
+      window.location.href = '/login';
     }
     return Promise.reject(error);
   }
