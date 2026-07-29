@@ -8,8 +8,6 @@ import {
   ArrowRightOnRectangleIcon,
   Bars3Icon,
   XMarkIcon,
-  CalendarIcon,
-  PinIcon,
 } from '@heroicons/react/24/outline';
 import { formatDate, truncateText } from '../../utils/helpers';
 import Logo from '../Common/Logo';
@@ -57,101 +55,9 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
     setIsMobileOpen(false);
   };
 
-  // Group conversations by date
-  const groupConversations = (convs) => {
-    const groups = {
-      pinned: [],
-      today: [],
-      yesterday: [],
-      thisWeek: [],
-      thisMonth: [],
-      older: [],
-    };
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const weekAgo = new Date(today);
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    const monthAgo = new Date(today);
-    monthAgo.setMonth(monthAgo.getMonth() - 1);
-
-    convs.forEach(conv => {
-      const date = new Date(conv.updated_at);
-      const cleanDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      
-      if (conv.pinned) {
-        groups.pinned.push(conv);
-      } else if (cleanDate.getTime() === today.getTime()) {
-        groups.today.push(conv);
-      } else if (cleanDate.getTime() === yesterday.getTime()) {
-        groups.yesterday.push(conv);
-      } else if (cleanDate > weekAgo) {
-        groups.thisWeek.push(conv);
-      } else if (cleanDate > monthAgo) {
-        groups.thisMonth.push(conv);
-      } else {
-        groups.older.push(conv);
-      }
-    });
-
-    return groups;
-  };
-
   const filteredConversations = conversations.filter(conv =>
     conv.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const groups = groupConversations(filteredConversations);
-
-  const renderGroup = (title, items, icon) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mt-4 first:mt-0">
-        <div className="flex items-center gap-2 px-2 py-1">
-          {icon && <span className="text-xs text-cyber-text-dim">{icon}</span>}
-          <span className="text-xs font-medium text-cyber-text-dim/60 uppercase tracking-wider">{title}</span>
-        </div>
-        {items.map((conv) => (
-          <div
-            key={conv.id}
-            onClick={() => handleSelectConversation(conv.id)}
-            className={`group p-2 rounded-xl cursor-pointer transition-all duration-200 ${
-              currentConversation === conv.id
-                ? 'bg-cyber-purple/10 border border-cyber-purple/20'
-                : 'hover:bg-cyber-dark/50 border border-transparent'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  {conv.pinned && <PinIcon className="w-3 h-3 text-cyber-text-dim/40 flex-shrink-0" />}
-                  <ChatBubbleLeftIcon className={`w-4 h-4 flex-shrink-0 ${
-                    currentConversation === conv.id ? 'text-cyber-purple' : 'text-cyber-text-dim/30'
-                  }`} />
-                  <span className={`text-sm truncate ${
-                    currentConversation === conv.id ? 'text-cyber-text' : 'text-cyber-text-dim'
-                  }`}>
-                    {truncateText(conv.title, 30)}
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteConversation(conv.id);
-                }}
-                className="opacity-0 group-hover:opacity-100 text-cyber-text-dim hover:text-red-400 transition-all duration-200 p-1 rounded-lg hover:bg-red-400/10"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  };
 
   const sidebarContent = (
     <div className="flex flex-col h-full">
@@ -159,8 +65,9 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
       <div className="p-4 border-b border-cyber-border flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Logo size={28} showText={false} />
+            <Logo size={32} showText={false} />
             <span className="text-lg font-bold text-gradient">Nova</span>
+            <span className="text-xs text-cyber-text-dim bg-cyber-dark/50 px-2 py-0.5 rounded-full">AI</span>
           </div>
           
           <button
@@ -183,13 +90,13 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
       {/* Search */}
       <div className="p-3 border-b border-cyber-border flex-shrink-0">
         <div className="relative">
-          <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-cyber-text-dim/40" />
+          <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-cyber-text-dim" />
           <input
             type="text"
             placeholder="Search conversations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-cyber-dark border border-cyber-border rounded-xl pl-9 pr-4 py-2 text-sm text-cyber-text placeholder-cyber-text-dim/30 focus:outline-none focus:border-cyber-purple transition"
+            className="w-full bg-cyber-dark border border-cyber-border rounded-xl pl-9 pr-4 py-2 text-sm text-cyber-text placeholder-cyber-text-dim/40 focus:outline-none focus:border-cyber-purple transition"
           />
         </div>
       </div>
@@ -201,14 +108,44 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
             {searchQuery ? 'No results found' : 'No conversations yet'}
           </div>
         ) : (
-          <>
-            {renderGroup('Pinned', groups.pinned, '📌')}
-            {renderGroup('Today', groups.today, '📅')}
-            {renderGroup('Yesterday', groups.yesterday, '📅')}
-            {renderGroup('This Week', groups.thisWeek, '📅')}
-            {renderGroup('This Month', groups.thisMonth, '📅')}
-            {renderGroup('Older', groups.older, '📅')}
-          </>
+          filteredConversations.map((conv) => (
+            <div
+              key={conv.id}
+              onClick={() => handleSelectConversation(conv.id)}
+              className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                currentConversation === conv.id
+                  ? 'bg-cyber-purple/10 border border-cyber-purple/20'
+                  : 'hover:bg-cyber-dark/50 border border-transparent'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <ChatBubbleLeftIcon className={`w-4 h-4 flex-shrink-0 ${
+                      currentConversation === conv.id ? 'text-cyber-purple' : 'text-cyber-text-dim'
+                    }`} />
+                    <span className={`text-sm truncate ${
+                      currentConversation === conv.id ? 'text-cyber-text' : 'text-cyber-text-dim'
+                    }`}>
+                      {truncateText(conv.title, 30)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-cyber-text-dim/50 mt-0.5">
+                    {formatDate(conv.updated_at)}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteConversation(conv.id);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 text-cyber-text-dim hover:text-red-400 transition-all duration-200 p-1 rounded-lg hover:bg-red-400/10"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))
         )}
       </div>
 
@@ -237,12 +174,10 @@ export default function Sidebar({ isMobileOpen, setIsMobileOpen }) {
 
   return (
     <>
-      {/* Desktop Sidebar */}
       <div className="hidden md:flex w-72 h-full bg-cyber-surface border-r border-cyber-border flex-col flex-shrink-0">
         {sidebarContent}
       </div>
 
-      {/* Mobile Sidebar Overlay */}
       {isMobileOpen && (
         <>
           <div
