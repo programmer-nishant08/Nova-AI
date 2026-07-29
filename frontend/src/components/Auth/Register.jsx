@@ -65,7 +65,7 @@ export default function Register({ onSwitch }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           className="w-full bg-cyber-dark/50 border border-cyber-border rounded-xl px-4 py-3 text-cyber-text placeholder-cyber-text-dim/30 focus:outline-none focus:border-cyber-purple focus:ring-1 focus:ring-cyber-purple transition"
-          placeholder="•••••••• (min 6 characters)"
+          placeholder="set a strong password (min 6 characters)"
           required
           disabled={loading}
           minLength={6}
