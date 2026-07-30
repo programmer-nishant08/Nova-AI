@@ -76,12 +76,15 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://nova-ai-bmtt.vercel.app",  # ✅ Your exact Vercel URL
         "https://*.vercel.app",
         "https://*.render.com",
+        "https://nova-ai-1-56i0.onrender.com",  # ✅ Your backend URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # ============================================
