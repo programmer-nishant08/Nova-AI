@@ -890,7 +890,7 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             if not api_key:
                 return "Error: GROQ_API_KEY not set in environment variables."
             
-            client = groq.Groq(api_key=api_key)
+            client = Groq.Groq(api_key=api_key)
             response = client.chat.completions.create(
                 messages=messages_to_send,
                 model="llama-3.3-70b-versatile",
