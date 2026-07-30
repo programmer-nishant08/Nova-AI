@@ -20,7 +20,7 @@ import shutil
 # ============================================
 
 try:
-    import groq
+    from groq import Groq
     HAS_GROQ = True
     print("✅ Groq API loaded")
 except ImportError:
