@@ -1,11 +1,9 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect } from 'react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
-// ✅ Create the context
-const ChatContext = createContext();
+export const ChatContext = createContext();
 
-// ✅ Export the provider
 export function ChatProvider({ children }) {
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
@@ -13,11 +11,17 @@ export function ChatProvider({ children }) {
   const [loading, setLoading] = useState(false);
   const [personality, setPersonality] = useState('default');
   const [personalities, setPersonalities] = useState([]);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
 
   useEffect(() => {
     loadPersonalities();
     loadConversations();
+    loadFiles();
   }, []);
+
+  // ============================================
+  // CONVERSATION METHODS
+  // ============================================
 
   const loadConversations = async () => {
     try {
@@ -43,6 +47,18 @@ export function ChatProvider({ children }) {
     }
   };
 
+  const loadMessages = async (conversationId) => {
+    try {
+      const response = await api.get(`/api/messages/${conversationId}`);
+      if (response.data.success) {
+        setMessages(response.data.messages);
+        setCurrentConversation(conversationId);
+      }
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  };
+
   const createConversation = async (title = 'New Conversation') => {
     try {
       const response = await api.post('/api/conversations', { title });
@@ -56,6 +72,7 @@ export function ChatProvider({ children }) {
       }
     } catch (error) {
       toast.error('Failed to create chat');
+      return null;
     }
   };
 
@@ -73,17 +90,9 @@ export function ChatProvider({ children }) {
     }
   };
 
-  const loadMessages = async (conversationId) => {
-    try {
-      const response = await api.get(`/api/messages/${conversationId}`);
-      if (response.data.success) {
-        setMessages(response.data.messages);
-        setCurrentConversation(conversationId);
-      }
-    } catch (error) {
-      console.error('Failed to load messages:', error);
-    }
-  };
+  // ============================================
+  // MESSAGE METHODS
+  // ============================================
 
   const sendMessage = async (message) => {
     if (!message.trim()) return;
@@ -131,22 +140,90 @@ export function ChatProvider({ children }) {
     }
   };
 
+  // ============================================
+  // FILE UPLOAD METHODS
+  // ============================================
+
+  const loadFiles = async () => {
+    try {
+      const response = await api.get('/api/files');
+      if (response.data.success) {
+        setUploadedFiles(response.data.files || []);
+      }
+    } catch (error) {
+      console.error('Failed to load files:', error);
+    }
+  };
+
+  const uploadFile = async (file) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await api.post('/api/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      if (response.data.success) {
+        toast.success(`File "${file.name}" uploaded successfully!`);
+        await loadFiles();
+        return response.data;
+      } else {
+        toast.error(response.data.error || 'File upload failed');
+        return null;
+      }
+    } catch (error) {
+      toast.error('File upload failed: ' + (error.response?.data?.error || error.message));
+      return null;
+    }
+  };
+
+  const deleteFile = async (fileId) => {
+    try {
+      await api.delete(`/api/files/${fileId}`);
+      toast.success('File deleted');
+      await loadFiles();
+    } catch (error) {
+      toast.error('Failed to delete file');
+    }
+  };
+
+  // ============================================
+  // CONTEXT VALUE
+  // ============================================
+
   const value = {
+    // Conversations
     conversations,
     currentConversation,
     setCurrentConversation,
+    loadConversations,
+    createConversation,
+    deleteConversation,
+    
+    // Messages
     messages,
     setMessages,
-    loading,
+    loadMessages,
+    sendMessage,
+    
+    // Personality
     personality,
     setPersonality,
     personalities,
-    loadConversations,
     loadPersonalities,
-    loadMessages,
-    createConversation,
-    deleteConversation,
-    sendMessage,
+    
+    // Files
+    uploadedFiles,
+    uploadFile,
+    deleteFile,
+    loadFiles,
+    
+    // Loading state
+    loading,
+    setLoading,
   };
 
   return (
@@ -154,16 +231,4 @@ export function ChatProvider({ children }) {
       {children}
     </ChatContext.Provider>
   );
-}
-
-// ✅ Export the context and a custom hook
-export { ChatContext };
-
-// ✅ Custom hook for using the chat context
-export function useChat() {
-  const context = useContext(ChatContext);
-  if (!context) {
-    throw new Error('useChat must be used within a ChatProvider');
-  }
-  return context;
 }

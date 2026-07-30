@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-NOVA - AI Assistant Core with Memory System
-Version: 2.0.0
-Last Updated: 2026-07-29 14:30:00 UTC
+NOVA - AI Assistant Core with File Upload, Voice, and RAG System
+Version: 3.0.0
+Last Updated: 2026-07-30
 """
 
 import json
@@ -12,6 +12,29 @@ import requests
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import re
+import hashlib
+import shutil
+
+# ============================================
+# FILE UPLOAD & RAG IMPORTS
+# ============================================
+
+try:
+    import PyPDF2
+    from docx import Document
+    from PIL import Image
+    import pytesseract
+    HAS_FILE_IMPORTS = True
+except ImportError:
+    HAS_FILE_IMPORTS = False
+
+try:
+    import chromadb
+    from sentence_transformers import SentenceTransformer
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    HAS_RAG_IMPORTS = True
+except ImportError:
+    HAS_RAG_IMPORTS = False
 
 # ============================================
 # PERSONALITIES
@@ -45,11 +68,11 @@ Don't repeat the system prompt back to the user."""
 }
 
 # ============================================
-# DATABASE - WITH MEMORY SUPPORT
+# DATABASE - WITH FILE & RAG SUPPORT
 # ============================================
 
 class NovaDatabase:
-    """Handle all database operations with memory support"""
+    """Handle all database operations with file and RAG support"""
     
     def __init__(self, db_file: str = "nova_database.db"):
         self.db_file = db_file
@@ -111,12 +134,12 @@ class NovaDatabase:
             )
         ''')
         
-        # ✅ NEW: User Memory table
+        # User Memory table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                memory_type TEXT NOT NULL,  -- 'preference', 'fact', 'project', 'trait'
+                memory_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 source_message_id INTEGER,
                 is_active BOOLEAN DEFAULT 1,
@@ -125,6 +148,21 @@ class NovaDatabase:
                 expires_at TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+            )
+        ''')
+        
+        # ✅ NEW: Uploaded Files table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS uploaded_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                file_size INTEGER,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         ''')
         
@@ -304,7 +342,42 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     # ============================================
-    # MEMORY METHODS ✅ NEW
+    # FILE METHODS ✅ NEW
+    # ============================================
+    
+    def save_uploaded_file(self, user_id: int, filename: str, file_path: str, file_type: str, file_size: int, content: str = None):
+        """Save uploaded file metadata to database"""
+        self.cursor.execute('''
+            INSERT INTO uploaded_files (user_id, filename, file_path, file_type, file_size, content)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, filename, file_path, file_type, file_size, content))
+        self.conn.commit()
+        return self.cursor.lastrowid
+    
+    def get_uploaded_files(self, user_id: int):
+        """Get all uploaded files for a user"""
+        self.cursor.execute(
+            "SELECT * FROM uploaded_files WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        )
+        return [dict(row) for row in self.cursor.fetchall()]
+    
+    def get_uploaded_file(self, file_id: int):
+        """Get a specific uploaded file"""
+        self.cursor.execute("SELECT * FROM uploaded_files WHERE id = ?", (file_id,))
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+    
+    def delete_uploaded_file(self, file_id: int):
+        """Delete an uploaded file"""
+        file = self.get_uploaded_file(file_id)
+        if file and os.path.exists(file['file_path']):
+            os.remove(file['file_path'])
+        self.cursor.execute("DELETE FROM uploaded_files WHERE id = ?", (file_id,))
+        self.conn.commit()
+    
+    # ============================================
+    # MEMORY METHODS
     # ============================================
     
     def save_user_memory(self, user_id: int, memory_type: str, content: str, source_message_id: int = None):
@@ -378,10 +451,17 @@ class NovaDatabase:
         )
         total_memories = self.cursor.fetchone()['total_memories']
         
+        self.cursor.execute(
+            "SELECT COUNT(*) as total_files FROM uploaded_files WHERE user_id = ?",
+            (user_id,)
+        )
+        total_files = self.cursor.fetchone()['total_files']
+        
         return {
             'total_messages': total_messages,
             'total_conversations': total_conversations,
-            'total_memories': total_memories
+            'total_memories': total_memories,
+            'total_files': total_files
         }
 
 # ============================================
@@ -452,6 +532,559 @@ def execute_python_code(code: str) -> str:
         return "❌ Code execution timed out (10s limit)"
     except Exception as e:
         return f"❌ Execution error: {str(e)}"
+
+# ============================================
+# FILE PROCESSING ✅ NEW
+# ============================================
+
+def extract_text_from_file(file_path: str, file_type: str) -> str:
+    """Extract text from uploaded files"""
+    try:
+        if file_type == 'application/pdf':
+            # Extract from PDF
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() + "\n"
+                return text
+        
+        elif file_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+            # Extract from DOCX
+            doc = Document(file_path)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        
+        elif file_type == 'text/plain':
+            # Extract from TXT
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        
+        elif file_type.startswith('image/'):
+            # Extract from Image using OCR
+            try:
+                import pytesseract
+                image = Image.open(file_path)
+                text = pytesseract.image_to_string(image)
+                return text
+            except:
+                return "OCR not available for this image."
+        
+        else:
+            return f"Unsupported file type: {file_type}"
+    
+    except Exception as e:
+        return f"Error extracting text: {str(e)}"
+
+# ============================================
+# RAG SYSTEM ✅ NEW
+# ============================================
+
+class RAGSystem:
+    """Retrieval-Augmented Generation System"""
+    
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        self.collection_name = f"user_{user_id}_docs"
+        self.chroma_client = None
+        self.embedding_model = None
+        self.collection = None
+        self._initialize()
+    
+    def _initialize(self):
+        """Initialize ChromaDB and embedding model"""
+        if not HAS_RAG_IMPORTS:
+            return
+        
+        try:
+            # Initialize ChromaDB client
+            self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            
+            # Initialize embedding model
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            # Get or create collection
+            try:
+                self.collection = self.chroma_client.get_collection(self.collection_name)
+            except:
+                self.collection = self.chroma_client.create_collection(self.collection_name)
+                
+        except Exception as e:
+            print(f"RAG initialization error: {e}")
+    
+    def add_document(self, file_id: int, content: str, metadata: dict = None):
+        """Add a document to the vector database"""
+        if not HAS_RAG_IMPORTS or self.collection is None:
+            return
+        
+        try:
+            # Split text into chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=500,
+                chunk_overlap=50,
+                length_function=len,
+            )
+            chunks = text_splitter.split_text(content)
+            
+            # Generate embeddings and add to collection
+            for i, chunk in enumerate(chunks):
+                embedding = self.embedding_model.encode(chunk).tolist()
+                self.collection.add(
+                    embeddings=[embedding],
+                    documents=[chunk],
+                    metadatas=[metadata or {}],
+                    ids=[f"file_{file_id}_chunk_{i}"]
+                )
+            
+            print(f"✅ Added {len(chunks)} chunks from file {file_id}")
+            
+        except Exception as e:
+            print(f"Error adding document to RAG: {e}")
+    
+    def search(self, query: str, n_results: int = 3) -> List[str]:
+        """Search for relevant documents"""
+        if not HAS_RAG_IMPORTS or self.collection is None:
+            return []
+        
+        try:
+            query_embedding = self.embedding_model.encode(query).tolist()
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results
+            )
+            
+            if results and results['documents']:
+                return results['documents'][0]
+            return []
+            
+        except Exception as e:
+            print(f"Error searching RAG: {e}")
+            return []
+    
+    def get_context(self, query: str, n_results: int = 3) -> str:
+        """Get context from relevant documents"""
+        docs = self.search(query, n_results)
+        if docs:
+            return "\n\n".join(docs)
+        return ""
+
+# ============================================
+# MAIN NOVA BOT
+# ============================================
+
+class NovaBot:
+    def __init__(self, username: str):
+        self.username = username
+        self.db = NovaDatabase()
+        self.personality = 'default'
+        self.user = self.db.get_or_create_user(username)
+        self.conversation_id = None
+        self.conversation_history = []
+        self.user_memories = []
+        self.rag = RAGSystem(self.user['id'])
+        
+        conversations = self.db.get_conversations(self.user['id'])
+        if conversations:
+            self.conversation_id = conversations[0]['id']
+        else:
+            self.conversation_id = self.db.create_conversation(self.user['id'])
+        
+        self.load_conversation_history()
+        self.load_user_memories()
+    
+    def load_conversation_history(self):
+        """Load conversation history from database"""
+        messages = self.db.get_messages(self.conversation_id, limit=20)
+        self.conversation_history = []
+        
+        if not messages:
+            self.system_prompt = {
+                "role": "system",
+                "content": self.get_personality_prompt()
+            }
+            self.db.save_message(self.conversation_id, "system", self.system_prompt["content"])
+            self.conversation_history.append(self.system_prompt)
+        else:
+            for msg in messages:
+                self.conversation_history.append({
+                    "role": msg['role'],
+                    "content": msg['content']
+                })
+    
+    def load_user_memories(self):
+        """Load user memories from database"""
+        self.user_memories = self.db.get_user_memories(self.user['id'])
+    
+    def get_personality_prompt(self) -> str:
+        """Get the full personality prompt with memories"""
+        base = PERSONALITIES.get(self.personality, PERSONALITIES['default'])
+        
+        memory_text = ""
+        if self.user_memories:
+            memory_text = "\n\nHere are some things I know about the user:\n"
+            for memory in self.user_memories:
+                memory_text += f"- {memory['content']}\n"
+            memory_text += "\nUse this information to personalize responses."
+        
+        return f"""{base}
+
+The user you're talking to is {self.username}. Address them by name occasionally.
+
+NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
+{memory_text}"""
+    
+    def switch_personality(self, new_personality: str) -> bool:
+        """Switch to a different personality"""
+        if new_personality in PERSONALITIES:
+            self.personality = new_personality
+            self.system_prompt = {
+                "role": "system",
+                "content": self.get_personality_prompt()
+            }
+            if self.conversation_history and self.conversation_history[0]['role'] == 'system':
+                self.conversation_history[0] = self.system_prompt
+                messages = self.db.get_messages(self.conversation_id)
+                if messages:
+                    self.db.cursor.execute(
+                        "UPDATE messages SET content = ? WHERE id = ?",
+                        (self.system_prompt["content"], messages[0]['id'])
+                    )
+                    self.db.conn.commit()
+            return True
+        return False
+    
+    def generate_chat_title(self, conversation_id: int) -> str:
+        """Generate a title based on the first user message in a conversation"""
+        messages = self.db.get_messages(conversation_id, limit=5)
+        
+        for msg in messages:
+            if msg['role'] == 'user':
+                content = msg['content'].strip()
+                if len(content) <= 30:
+                    return content
+                return content[:30] + "..."
+        
+        return "New Conversation"
+    
+    def extract_memories(self, user_message: str, response: str = "") -> list:
+        """Extract potential memories from a conversation"""
+        memories = []
+        
+        preference_patterns = [
+            r"(?:I|I'm|I am) (?:like|prefer|love|enjoy|hate|don't like) (.+?)[\.,]",
+            r"(?:My favorite|My preferred) (.+?) is (.+?)[\.,]",
+            r"(?:I|I'm|I am) (?:a|an) (.+?) (?:person|fan|enthusiast)[\.,]",
+        ]
+        
+        for pattern in preference_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                memories.append({
+                    'type': 'preference',
+                    'content': match if isinstance(match, str) else ' '.join(match)
+                })
+        
+        fact_patterns = [
+            r"(?:I|I'm|I am|I have|I've) (.+?)[\.,]",
+            r"(?:My|Mine|My name is) (.+?)[\.,]",
+        ]
+        
+        for pattern in fact_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                if len(match) > 5 and len(match) < 100:
+                    memories.append({
+                        'type': 'fact',
+                        'content': match if isinstance(match, str) else ' '.join(match)
+                    })
+        
+        project_patterns = [
+            r"(?:I|I'm|I am) (?:working on|building|creating|developing) (.+?)[\.,]",
+            r"(?:My|My current) project (.+?)[\.,]",
+        ]
+        
+        for pattern in project_patterns:
+            matches = re.findall(pattern, user_message, re.IGNORECASE)
+            for match in matches:
+                memories.append({
+                    'type': 'project',
+                    'content': match if isinstance(match, str) else ' '.join(match)
+                })
+        
+        return memories
+    
+    def save_memories(self, user_message: str, message_id: int):
+        """Extract and save memories from user message"""
+        extracted = self.extract_memories(user_message)
+        
+        for memory in extracted:
+            existing = self.db.cursor.execute('''
+                SELECT id FROM user_memory 
+                WHERE user_id = ? AND memory_type = ? AND content LIKE ? AND is_active = 1
+            ''', (self.user['id'], memory['type'], f"%{memory['content']}%"))
+            
+            if not existing.fetchone():
+                self.db.save_user_memory(
+                    self.user['id'],
+                    memory['type'],
+                    memory['content'],
+                    message_id
+                )
+                print(f"🧠 Saved memory: {memory['type']} - {memory['content']}")
+        
+        self.load_user_memories()
+    
+    def upload_file(self, filename: str, file_path: str, file_type: str, file_size: int) -> dict:
+        """Upload and process a file"""
+        try:
+            # Extract text from file
+            content = extract_text_from_file(file_path, file_type)
+            
+            # Save to database
+            file_id = self.db.save_uploaded_file(
+                self.user['id'],
+                filename,
+                file_path,
+                file_type,
+                file_size,
+                content
+            )
+            
+            # Add to RAG if text was extracted
+            if content and len(content) > 50 and HAS_RAG_IMPORTS:
+                metadata = {
+                    "filename": filename,
+                    "file_type": file_type,
+                    "user_id": self.user['id']
+                }
+                self.rag.add_document(file_id, content, metadata)
+            
+            return {
+                "success": True,
+                "file_id": file_id,
+                "filename": filename,
+                "content_preview": content[:500] if content else "No text extracted"
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def get_response(self, user_input: str) -> str:
+        """Get response from AI with RAG support"""
+        
+        # Check for file upload command
+        if user_input.lower().startswith('/upload'):
+            return "Please use the upload button in the chat interface to upload files."
+        
+        # Check for special commands
+        if user_input.lower().startswith('/search'):
+            query = user_input[8:].strip()
+            if query:
+                return web_search(query)
+            else:
+                return "Please provide a search query. Example: /search python tutorials"
+        
+        elif user_input.lower().startswith('/run'):
+            code = user_input[4:].strip()
+            if code:
+                return execute_python_code(code)
+            else:
+                return "Please provide code to execute. Example: /run print('Hello')"
+        
+        # Check for RAG context (does the user mention uploaded files?)
+        # Try to find relevant context from RAG
+        rag_context = ""
+        if HAS_RAG_IMPORTS and hasattr(self, 'rag'):
+            try:
+                docs = self.rag.search(user_input, n_results=2)
+                if docs:
+                    rag_context = "\n\nHere is some relevant information from your uploaded documents:\n" + "\n---\n".join(docs)
+            except:
+                pass
+        
+        # Save user message
+        message_id = self.db.save_message(self.conversation_id, "user", user_input)
+        self.conversation_history.append({"role": "user", "content": user_input})
+        
+        # Extract and save memories
+        self.save_memories(user_input, message_id)
+        
+        try:
+            # Try Groq API
+            try:
+                import groq
+                client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                
+                # Build messages with RAG context
+                messages_to_send = self.conversation_history.copy()
+                
+                # Add memories
+                if self.user_memories:
+                    memory_text = "Here are some facts about the user: " + \
+                                  ", ".join([m['content'] for m in self.user_memories[:5]])
+                    if messages_to_send and messages_to_send[0]['role'] == 'system':
+                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
+                
+                # Add RAG context
+                if rag_context:
+                    messages_to_send.insert(1, {
+                        "role": "system",
+                        "content": rag_context
+                    })
+                
+                response = client.chat.completions.create(
+                    messages=messages_to_send,
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.7,
+                    max_tokens=512,
+                )
+                full_response = response.choices[0].message.content
+                
+            except Exception as e:
+                print(f"Groq error: {e}, falling back to Ollama...")
+                import ollama
+                
+                messages_to_send = self.conversation_history.copy()
+                if self.user_memories:
+                    memory_text = "Here are some facts about the user: " + \
+                                  ", ".join([m['content'] for m in self.user_memories[:5]])
+                    if messages_to_send and messages_to_send[0]['role'] == 'system':
+                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
+                
+                if rag_context:
+                    messages_to_send.insert(1, {
+                        "role": "system",
+                        "content": rag_context
+                    })
+                
+                stream = ollama.chat(
+                    model='mistral:7b',
+                    messages=messages_to_send,
+                    stream=True,
+                    options={
+                        'num_ctx': 4096,
+                        'num_predict': 512,
+                        'temperature': 0.7,
+                    }
+                )
+                full_response = ""
+                for chunk in stream:
+                    content = chunk['message']['content']
+                    full_response += content
+            
+            # Save assistant response
+            self.db.save_message(self.conversation_id, "assistant", full_response)
+            self.conversation_history.append({"role": "assistant", "content": full_response})
+            
+            # Update conversation title if needed
+            conversations = self.db.get_conversations(self.user['id'])
+            if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
+                title = self.generate_chat_title(self.conversation_id)
+                self.db.update_conversation_title(self.conversation_id, title)
+            
+            return full_response
+            
+        except Exception as e:
+            print(f"Error: {e}")
+            return f"Error: {str(e)}. Please check your API key or Ollama connection."
+    
+    def generate_summary(self, conversation_id: int) -> str:
+        """Generate a summary of a conversation"""
+        messages = self.db.get_messages(conversation_id, limit=20)
+        if len(messages) < 3:
+            return "Short conversation"
+        
+        try:
+            import groq
+            client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+            
+            text = ""
+            for msg in messages:
+                if msg['role'] == 'user':
+                    text += f"User: {msg['content']}\n"
+                elif msg['role'] == 'assistant':
+                    text += f"Nova: {msg['content']}\n"
+            
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "Summarize this conversation in 1-2 sentences."},
+                    {"role": "user", "content": text}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=100,
+            )
+            summary = response.choices[0].message.content
+            return summary
+        except:
+            return "Conversation"
+    
+    def switch_conversation(self, conversation_id: int):
+        """Switch to a different conversation"""
+        self.conversation_id = conversation_id
+        self.load_conversation_history()
+        self.load_user_memories()
+    
+    def create_new_conversation(self, title: str = "New Conversation") -> int:
+        """Create a new conversation"""
+        conv_id = self.db.create_conversation(self.user['id'], title)
+        self.switch_conversation(conv_id)
+        return conv_id
+    
+    def delete_conversation(self, conversation_id: int):
+        """Delete a conversation"""
+        if conversation_id == self.conversation_id:
+            conversations = self.db.get_conversations(self.user['id'])
+            other = [c for c in conversations if c['id'] != conversation_id]
+            if other:
+                self.switch_conversation(other[0]['id'])
+            else:
+                self.create_new_conversation()
+        
+        self.db.delete_conversation(conversation_id)
+    
+    def get_conversations(self) -> list:
+        """Get all conversations for the user"""
+        return self.db.get_conversations(self.user['id'])
+    
+    def get_messages(self) -> list:
+        """Get all messages in current conversation"""
+        return self.db.get_messages(self.conversation_id)
+    
+    def export_conversation(self, format_type: str = 'txt') -> str:
+        """Export current conversation"""
+        import os
+        from datetime import datetime
+        
+        messages = self.get_messages()
+        if not messages:
+            return "No messages to export"
+        
+        conversations = self.get_conversations()
+        title = next((c['title'] for c in conversations if c['id'] == self.conversation_id), "conversation")
+        clean_title = re.sub(r'[^\w\s-]', '', title)[:30]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"nova_exports/{clean_title}_{timestamp}.{format_type}"
+        
+        if format_type == 'txt':
+            export_to_txt(messages, filename)
+        elif format_type == 'json':
+            export_to_json(messages, filename)
+        elif format_type == 'pdf':
+            export_to_pdf(messages, filename)
+        else:
+            return f"Unknown format: {format_type}"
+        
+        return f"Exported to: {filename}"
+    
+    def get_stats(self) -> dict:
+        """Get user statistics"""
+        return self.db.get_stats(self.user['id'])
 
 # ============================================
 # EXPORT FUNCTIONS
@@ -540,372 +1173,6 @@ def export_to_pdf(messages: list, filename: str) -> str:
     return filename
 
 # ============================================
-# MAIN NOVA BOT - WITH MEMORY SYSTEM
-# ============================================
-
-class NovaBot:
-    def __init__(self, username: str):
-        self.username = username
-        self.db = NovaDatabase()
-        self.personality = 'default'
-        self.user = self.db.get_or_create_user(username)
-        self.conversation_id = None
-        self.conversation_history = []
-        self.user_memories = []
-        
-        conversations = self.db.get_conversations(self.user['id'])
-        if conversations:
-            self.conversation_id = conversations[0]['id']
-        else:
-            self.conversation_id = self.db.create_conversation(self.user['id'])
-        
-        self.load_conversation_history()
-        self.load_user_memories()
-    
-    def load_conversation_history(self):
-        """Load conversation history from database"""
-        messages = self.db.get_messages(self.conversation_id, limit=20)
-        self.conversation_history = []
-        
-        if not messages:
-            self.system_prompt = {
-                "role": "system",
-                "content": self.get_personality_prompt()
-            }
-            self.db.save_message(self.conversation_id, "system", self.system_prompt["content"])
-            self.conversation_history.append(self.system_prompt)
-        else:
-            for msg in messages:
-                self.conversation_history.append({
-                    "role": msg['role'],
-                    "content": msg['content']
-                })
-    
-    def load_user_memories(self):
-        """Load user memories from database"""
-        self.user_memories = self.db.get_user_memories(self.user['id'])
-    
-    def get_personality_prompt(self) -> str:
-        """Get the full personality prompt with memories"""
-        base = PERSONALITIES.get(self.personality, PERSONALITIES['default'])
-        
-        # ✅ Add memories to the prompt if they exist
-        memory_text = ""
-        if self.user_memories:
-            memory_text = "\n\nHere are some things I know about the user:\n"
-            for memory in self.user_memories:
-                memory_text += f"- {memory['content']}\n"
-            memory_text += "\nUse this information to personalize responses."
-        
-        return f"""{base}
-
-The user you're talking to is {self.username}. Address them by name occasionally.
-
-NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
-{memory_text}"""
-    
-    def switch_personality(self, new_personality: str) -> bool:
-        """Switch to a different personality"""
-        if new_personality in PERSONALITIES:
-            self.personality = new_personality
-            self.system_prompt = {
-                "role": "system",
-                "content": self.get_personality_prompt()
-            }
-            if self.conversation_history and self.conversation_history[0]['role'] == 'system':
-                self.conversation_history[0] = self.system_prompt
-                messages = self.db.get_messages(self.conversation_id)
-                if messages:
-                    self.db.cursor.execute(
-                        "UPDATE messages SET content = ? WHERE id = ?",
-                        (self.system_prompt["content"], messages[0]['id'])
-                    )
-                    self.db.conn.commit()
-            return True
-        return False
-    
-    def generate_chat_title(self, conversation_id: int) -> str:
-        """Generate a title based on the first user message in a conversation"""
-        messages = self.db.get_messages(conversation_id, limit=5)
-        
-        for msg in messages:
-            if msg['role'] == 'user':
-                content = msg['content'].strip()
-                if len(content) <= 30:
-                    return content
-                return content[:30] + "..."
-        
-        return "New Conversation"
-    
-    # ✅ NEW: Extract memories from messages
-    def extract_memories(self, user_message: str, response: str = "") -> list:
-        """Extract potential memories from a conversation"""
-        memories = []
-        
-        # Simple pattern matching for common memory types
-        # In production, you'd use AI for this
-        
-        # Check for preferences
-        preference_patterns = [
-            r"(?:I|I'm|I am) (?:like|prefer|love|enjoy|hate|don't like) (.+?)[\.,]",
-            r"(?:My favorite|My preferred) (.+?) is (.+?)[\.,]",
-            r"(?:I|I'm|I am) (?:a|an) (.+?) (?:person|fan|enthusiast)[\.,]",
-        ]
-        
-        for pattern in preference_patterns:
-            matches = re.findall(pattern, user_message, re.IGNORECASE)
-            for match in matches:
-                memories.append({
-                    'type': 'preference',
-                    'content': match if isinstance(match, str) else ' '.join(match)
-                })
-        
-        # Check for facts
-        fact_patterns = [
-            r"(?:I|I'm|I am|I have|I've) (.+?)[\.,]",
-            r"(?:My|Mine|My name is) (.+?)[\.,]",
-        ]
-        
-        for pattern in fact_patterns:
-            matches = re.findall(pattern, user_message, re.IGNORECASE)
-            for match in matches:
-                if len(match) > 5 and len(match) < 100:  # Avoid very short or long matches
-                    memories.append({
-                        'type': 'fact',
-                        'content': match if isinstance(match, str) else ' '.join(match)
-                    })
-        
-        # Check for projects
-        project_patterns = [
-            r"(?:I|I'm|I am) (?:working on|building|creating|developing) (.+?)[\.,]",
-            r"(?:My|My current) project (.+?)[\.,]",
-        ]
-        
-        for pattern in project_patterns:
-            matches = re.findall(pattern, user_message, re.IGNORECASE)
-            for match in matches:
-                memories.append({
-                    'type': 'project',
-                    'content': match if isinstance(match, str) else ' '.join(match)
-                })
-        
-        return memories
-    
-    # ✅ NEW: Save memories to database
-    def save_memories(self, user_message: str, message_id: int):
-        """Extract and save memories from user message"""
-        extracted = self.extract_memories(user_message)
-        
-        for memory in extracted:
-            # Check if this memory already exists
-            existing = self.db.cursor.execute('''
-                SELECT id FROM user_memory 
-                WHERE user_id = ? AND memory_type = ? AND content LIKE ? AND is_active = 1
-            ''', (self.user['id'], memory['type'], f"%{memory['content']}%"))
-            
-            if not existing.fetchone():
-                self.db.save_user_memory(
-                    self.user['id'],
-                    memory['type'],
-                    memory['content'],
-                    message_id
-                )
-                print(f"🧠 Saved memory: {memory['type']} - {memory['content']}")
-        
-        # Reload memories
-        self.load_user_memories()
-    
-    def get_response(self, user_input: str) -> str:
-        """Get response from AI with memory support"""
-        
-        # Check for special commands
-        if user_input.lower().startswith('/search'):
-            query = user_input[8:].strip()
-            if query:
-                return web_search(query)
-            else:
-                return "Please provide a search query. Example: /search python tutorials"
-        
-        elif user_input.lower().startswith('/run'):
-            code = user_input[4:].strip()
-            if code:
-                return execute_python_code(code)
-            else:
-                return "Please provide code to execute. Example: /run print('Hello')"
-        
-        # Save user message
-        message_id = self.db.save_message(self.conversation_id, "user", user_input)
-        self.conversation_history.append({"role": "user", "content": user_input})
-        
-        # ✅ Extract and save memories
-        self.save_memories(user_input, message_id)
-        
-        try:
-            # ✅ Try Groq API
-            try:
-                import groq
-                client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
-                
-                # ✅ Add memories to the conversation history if they exist
-                messages_to_send = self.conversation_history.copy()
-                if self.user_memories:
-                    memory_context = {
-                        "role": "system",
-                        "content": "Here are some facts about the user to remember: " + 
-                                   ", ".join([m['content'] for m in self.user_memories[:5]])
-                    }
-                    # Add after the main system prompt
-                    messages_to_send.insert(1, memory_context)
-                
-                response = client.chat.completions.create(
-                    messages=messages_to_send,
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.7,
-                    max_tokens=512,
-                )
-                full_response = response.choices[0].message.content
-                
-            except Exception as e:
-                print(f"Groq error: {e}, falling back to Ollama...")
-                # Fallback to Ollama
-                import ollama
-                
-                # ✅ Also add memories for Ollama
-                messages_to_send = self.conversation_history.copy()
-                if self.user_memories:
-                    memory_text = "Here are some facts about the user: " + \
-                                  ", ".join([m['content'] for m in self.user_memories[:5]])
-                    # Find the system prompt and add memory info
-                    if messages_to_send and messages_to_send[0]['role'] == 'system':
-                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
-                
-                stream = ollama.chat(
-                    model='mistral:7b',
-                    messages=messages_to_send,
-                    stream=True,
-                    options={
-                        'num_ctx': 4096,
-                        'num_predict': 512,
-                        'temperature': 0.7,
-                    }
-                )
-                full_response = ""
-                for chunk in stream:
-                    content = chunk['message']['content']
-                    full_response += content
-            
-            # Save assistant response
-            self.db.save_message(self.conversation_id, "assistant", full_response)
-            self.conversation_history.append({"role": "assistant", "content": full_response})
-            
-            # Update conversation title if needed
-            conversations = self.db.get_conversations(self.user['id'])
-            if len(conversations) == 1 and conversations[0]['title'] == "First Conversation":
-                title = self.generate_chat_title(self.conversation_id)
-                self.db.update_conversation_title(self.conversation_id, title)
-            
-            return full_response
-            
-        except Exception as e:
-            print(f"Error: {e}")
-            return f"Error: {str(e)}. Please check your API key or Ollama connection."
-    
-    # ✅ NEW: Generate conversation summary
-    def generate_summary(self, conversation_id: int) -> str:
-        """Generate a summary of a conversation"""
-        messages = self.db.get_messages(conversation_id, limit=20)
-        if len(messages) < 3:
-            return "Short conversation"
-        
-        try:
-            import groq
-            client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
-            
-            # Format messages for summary
-            text = ""
-            for msg in messages:
-                if msg['role'] == 'user':
-                    text += f"User: {msg['content']}\n"
-                elif msg['role'] == 'assistant':
-                    text += f"Nova: {msg['content']}\n"
-            
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "Summarize this conversation in 1-2 sentences."},
-                    {"role": "user", "content": text}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=100,
-            )
-            summary = response.choices[0].message.content
-            return summary
-        except:
-            return "Conversation"
-    
-    def switch_conversation(self, conversation_id: int):
-        """Switch to a different conversation"""
-        self.conversation_id = conversation_id
-        self.load_conversation_history()
-        self.load_user_memories()
-    
-    def create_new_conversation(self, title: str = "New Conversation") -> int:
-        """Create a new conversation"""
-        conv_id = self.db.create_conversation(self.user['id'], title)
-        self.switch_conversation(conv_id)
-        return conv_id
-    
-    def delete_conversation(self, conversation_id: int):
-        """Delete a conversation"""
-        if conversation_id == self.conversation_id:
-            conversations = self.db.get_conversations(self.user['id'])
-            other = [c for c in conversations if c['id'] != conversation_id]
-            if other:
-                self.switch_conversation(other[0]['id'])
-            else:
-                self.create_new_conversation()
-        
-        self.db.delete_conversation(conversation_id)
-    
-    def get_conversations(self) -> list:
-        """Get all conversations for the user"""
-        return self.db.get_conversations(self.user['id'])
-    
-    def get_messages(self) -> list:
-        """Get all messages in current conversation"""
-        return self.db.get_messages(self.conversation_id)
-    
-    def export_conversation(self, format_type: str = 'txt') -> str:
-        """Export current conversation"""
-        import os
-        from datetime import datetime
-        
-        messages = self.get_messages()
-        if not messages:
-            return "No messages to export"
-        
-        conversations = self.get_conversations()
-        title = next((c['title'] for c in conversations if c['id'] == self.conversation_id), "conversation")
-        clean_title = re.sub(r'[^\w\s-]', '', title)[:30]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"nova_exports/{clean_title}_{timestamp}.{format_type}"
-        
-        if format_type == 'txt':
-            export_to_txt(messages, filename)
-        elif format_type == 'json':
-            export_to_json(messages, filename)
-        elif format_type == 'pdf':
-            export_to_pdf(messages, filename)
-        else:
-            return f"Unknown format: {format_type}"
-        
-        return f"Exported to: {filename}"
-    
-    def get_stats(self) -> dict:
-        """Get user statistics"""
-        return self.db.get_stats(self.user['id'])
-
-# ============================================
 # TERMINAL UI (Optional)
 # ============================================
 
@@ -923,8 +1190,8 @@ if __name__ == "__main__":
     if HAS_RICH:
         console = Console()
     
-    print("\n🚀 Welcome to Nova AI with Memory System!")
-    print("📅 Version: 2.0.0 - 2026-07-29")
+    print("\n🚀 Welcome to Nova AI with File Upload, Voice, and RAG!")
+    print("📅 Version: 3.0.0 - 2026-07-30")
     username = input("What's your name? ").strip() or "User"
     
     bot = NovaBot(username)
@@ -943,6 +1210,7 @@ if __name__ == "__main__":
     print("  /export <format> - Export conversation (txt, json, pdf)")
     print("  /stats           - Show statistics")
     print("  /memories        - Show stored memories")
+    print("  /files           - Show uploaded files")
     print("  /exit            - Exit")
     print()
     
@@ -994,6 +1262,19 @@ if __name__ == "__main__":
                     print("No memories stored yet. Start a conversation to build memories!")
                 continue
             
+            elif user_input == '/files':
+                files = bot.db.get_uploaded_files(bot.user['id'])
+                if files:
+                    print(f"\n📁 Uploaded files for {username}:")
+                    for i, file in enumerate(files, 1):
+                        size_kb = file['file_size'] / 1024 if file['file_size'] else 0
+                        print(f"  {i}. {file['filename']} ({size_kb:.1f} KB)")
+                        print(f"     Type: {file['file_type']}")
+                        print(f"     Uploaded: {file['created_at'][:16]}")
+                else:
+                    print("No files uploaded yet.")
+                continue
+            
             elif user_input.startswith('/switch '):
                 try:
                     conv_id = int(user_input.split()[1])
@@ -1024,6 +1305,7 @@ if __name__ == "__main__":
                 print(f"  Total Messages: {stats['total_messages']}")
                 print(f"  Total Conversations: {stats['total_conversations']}")
                 print(f"  Total Memories: {stats['total_memories']}")
+                print(f"  Total Files: {stats['total_files']}")
                 continue
             
             response = bot.get_response(user_input)

@@ -18,6 +18,7 @@ export default function Chat() {
   } = useChat();
   const { user } = useAuth();
   const messagesEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
 
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -29,26 +30,33 @@ export default function Chat() {
   }, [messages]);
 
   return (
-    <div className="flex-1 flex flex-col bg-cyber-dark relative min-h-0">
-      <ChatHeader 
-        personality={personality}
-        setPersonality={setPersonality}
-        personalities={personalities}
-        username={user?.username}
-        conversationId={currentConversation}
-      />
+    <div className="flex flex-col h-screen bg-cyber-dark relative min-h-0">
+      {/* Fixed Header */}
+      <div className="flex-shrink-0 relative z-20">
+        <ChatHeader 
+          personality={personality}
+          setPersonality={setPersonality}
+          personalities={personalities}
+          username={user?.username}
+          conversationId={currentConversation}
+        />
+      </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 relative z-10">
+      {/* Scrollable Messages Area */}
+      <div 
+        ref={chatContainerRef}
+        className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-4 relative z-10"
+      >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-cyber-text-dim">
-            <Logo size={48} showText={false} className="mb-4" />
-            <h2 className="text-xl font-semibold text-cyber-text mb-1">Welcome to Nova AI</h2>
+            <Logo size={64} showText={false} className="mb-6" />
+            <h2 className="text-2xl font-bold text-cyber-text mb-2">Welcome to Nova AI</h2>
             <p className="text-sm text-center px-4">Start a conversation by typing a message below.</p>
             <div className="flex gap-2 mt-4 flex-wrap justify-center">
-              <span className="px-3 py-1 bg-cyber-surface/50 border border-cyber-border/20 rounded-full text-xs text-cyber-text-dim">💬 Chat</span>
-              <span className="px-3 py-1 bg-cyber-surface/50 border border-cyber-border/20 rounded-full text-xs text-cyber-text-dim">⚡ Fast</span>
-              <span className="px-3 py-1 bg-cyber-surface/50 border border-cyber-border/20 rounded-full text-xs text-cyber-text-dim">🧠 Smart</span>
-              <span className="px-3 py-1 bg-cyber-surface/50 border border-cyber-border/20 rounded-full text-xs text-cyber-text-dim">🔒 Private</span>
+              <span className="px-3 py-1.5 bg-cyber-surface/50 border border-cyber-border rounded-full text-xs text-cyber-text-dim">💬 Chat</span>
+              <span className="px-3 py-1.5 bg-cyber-surface/50 border border-cyber-border rounded-full text-xs text-cyber-text-dim">⚡ Fast</span>
+              <span className="px-3 py-1.5 bg-cyber-surface/50 border border-cyber-border rounded-full text-xs text-cyber-text-dim">🧠 Smart</span>
+              <span className="px-3 py-1.5 bg-cyber-surface/50 border border-cyber-border rounded-full text-xs text-cyber-text-dim">🔒 Private</span>
             </div>
           </div>
         )}
@@ -70,6 +78,7 @@ export default function Chat() {
                 <span className="typing-dot" style={{ animationDelay: '0.2s' }} />
                 <span className="typing-dot" style={{ animationDelay: '0.4s' }} />
               </div>
+              <p className="text-xs text-cyber-text-dim/50 mt-1 text-center">Nova is thinking...</p>
             </div>
           </div>
         )}
@@ -77,7 +86,8 @@ export default function Chat() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="flex-shrink-0">
+      {/* ✅ Fixed Input - Always at bottom */}
+      <div className="flex-shrink-0 sticky bottom-0 z-30 bg-cyber-dark/50 backdrop-blur-sm border-t border-cyber-border/20">
         <MessageInput onSend={sendMessage} disabled={loading} />
       </div>
     </div>
