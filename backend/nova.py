@@ -29,12 +29,13 @@ except ImportError:
     HAS_FILE_IMPORTS = False
 
 try:
-    import chromadb
     from sentence_transformers import SentenceTransformer
+    import chromadb
     from langchain.text_splitter import RecursiveCharacterTextSplitter
     HAS_RAG_IMPORTS = True
 except ImportError:
     HAS_RAG_IMPORTS = False
+    print("⚠️ RAG system imports not available. Please install 'sentence-transformers', 'chromadb', and 'langchain' for full functionality.")
 
 # ============================================
 # PERSONALITIES
