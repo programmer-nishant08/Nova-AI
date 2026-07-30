@@ -8,6 +8,7 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline';
 import { useChat } from '../../hooks/useChat';
+import toast from 'react-hot-toast';
 
 export default function MessageInput({ onSend, disabled }) {
   const [message, setMessage] = useState('');
@@ -65,7 +66,7 @@ export default function MessageInput({ onSend, disabled }) {
         return;
       }
       
-      const text = messageElements[messageElements.length - 1].textContent || '';
+      const text = messageElements[messageElements.length - 1]?.textContent || '';
       if (!text) {
         toast.error('No message to read aloud');
         return;
@@ -99,8 +100,10 @@ export default function MessageInput({ onSend, disabled }) {
       // If we have a file, upload it first
       if (uploadedFile) {
         const result = await uploadFile(uploadedFile);
-        if (result) {
+        if (result && result.success) {
           toast.success(`File "${uploadedFile.name}" uploaded! You can now ask questions about it.`);
+        } else {
+          toast.error('File upload failed.');
         }
         setUploadedFile(null);
       }

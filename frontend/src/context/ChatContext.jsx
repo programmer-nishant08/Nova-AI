@@ -195,7 +195,6 @@ export function ChatProvider({ children }) {
   // ============================================
 
   const value = {
-    // Conversations
     conversations,
     currentConversation,
     setCurrentConversation,
@@ -203,25 +202,21 @@ export function ChatProvider({ children }) {
     createConversation,
     deleteConversation,
     
-    // Messages
     messages,
     setMessages,
     loadMessages,
     sendMessage,
     
-    // Personality
     personality,
     setPersonality,
     personalities,
     loadPersonalities,
     
-    // Files
     uploadedFiles,
     uploadFile,
     deleteFile,
     loadFiles,
     
-    // Loading state
     loading,
     setLoading,
   };

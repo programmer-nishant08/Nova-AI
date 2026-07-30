@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-NOVA API Server - Complete Backend API with Groq Support
+NOVA API Server - Complete Backend API with File Upload & RAG
+Version: 3.0.0
 """
 
 import os
 import json
 import hashlib
 import secrets
+import shutil
 from typing import Optional
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
@@ -30,6 +32,10 @@ ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", 60 * 24 * 7))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Create uploads directory
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ============================================
 # DATA MODELS
@@ -59,13 +65,20 @@ class ConversationCreate(BaseModel):
 app = FastAPI(
     title="Nova AI API",
     description="Complete AI Assistant API with Authentication",
-    version="2.0.0"
+    version="3.0.0"
 )
 
-# ✅ CORS for Vercel + Render
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://*.vercel.app",
+        "https://*.render.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -212,7 +225,7 @@ def init_db():
 init_db()
 
 # ============================================
-# HEALTH CHECK ENDPOINT
+# HEALTH CHECK
 # ============================================
 
 @app.get("/api/health")
@@ -221,7 +234,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "Nova AI API",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -394,17 +407,77 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
         return {"success": False, "error": str(e)}
 
 # ============================================
+# FILE UPLOAD ENDPOINTS ✅ NEW
+# ============================================
+
+@app.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload a file for RAG processing"""
+    try:
+        # Validate file
+        if not file.filename:
+            return {"success": False, "error": "No file provided"}
+        
+        # Save file
+        file_path = os.path.join(UPLOAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Get bot instance
+        bot = get_bot(current_user["username"])
+        
+        # Process file
+        result = bot.upload_file(
+            filename=file.filename,
+            file_path=file_path,
+            file_type=file.content_type or "application/octet-stream",
+            file_size=os.path.getsize(file_path)
+        )
+        
+        return result
+        
+    except Exception as e:
+        print(f"Upload error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/files")
+async def get_files(current_user: dict = Depends(get_current_user)):
+    """Get all uploaded files for the user"""
+    try:
+        bot = get_bot(current_user["username"])
+        files = bot.db.get_uploaded_files(current_user["id"])
+        return {"success": True, "files": files}
+    except Exception as e:
+        print(f"Get files error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.delete("/api/files/{file_id}")
+async def delete_file(file_id: int, current_user: dict = Depends(get_current_user)):
+    """Delete a specific file"""
+    try:
+        bot = get_bot(current_user["username"])
+        bot.db.delete_uploaded_file(file_id)
+        return {"success": True, "message": "File deleted"}
+    except Exception as e:
+        print(f"Delete file error: {e}")
+        return {"success": False, "error": str(e)}
+
+# ============================================
 # RUN SERVER
 # ============================================
 
 if __name__ == "__main__":
     print("""
     ╔═══════════════════════════════════════════════════════════╗
-    ║  🚀 NOVA API SERVER v2.0 - WITH GROQ SUPPORT            ║
+    ║  🚀 NOVA API SERVER v3.0 - WITH FILE UPLOAD & RAG       ║
     ║  📡 API: http://localhost:8000                          ║
     ║  📚 Docs: http://localhost:8000/docs                    ║
     ║  🔐 Auth: JWT Authentication Ready                      ║
-    ║  🤖 Model: Groq Llama (or fallback to Ollama)          ║
+    ║  📎 File Upload: PDF, DOCX, TXT, Images                 ║
+    ║  🧠 RAG: Document Q&A                                   ║
     ╚═══════════════════════════════════════════════════════════╝
     """)
     uvicorn.run(
