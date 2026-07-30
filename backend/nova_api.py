@@ -2,6 +2,7 @@
 """
 NOVA API Server - Complete Backend API with File Upload & RAG
 Version: 3.0.0
+Last Updated: 2026-07-30
 """
 
 import os
@@ -38,6 +39,35 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ============================================
+# CORS CONFIGURATION - COMPLETE FIX
+# ============================================
+
+# Get allowed origins from environment variable
+cors_origins_env = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
+
+# Always include these origins
+default_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "https://nova-ai-bmtt.vercel.app",
+    "https://nova-ai.vercel.app",
+    "https://*.vercel.app",
+    "https://*.render.com",
+]
+
+# Combine and clean
+allowed_origins = list(set(default_origins + [o.strip() for o in cors_origins_env if o.strip()]))
+
+print("=" * 60)
+print("🌐 CORS Configuration")
+print("=" * 60)
+for origin in allowed_origins:
+    print(f"  ✅ {origin}")
+print("=" * 60)
+
+# ============================================
 # DATA MODELS
 # ============================================
 
@@ -68,23 +98,28 @@ app = FastAPI(
     version="3.0.0"
 )
 
-# CORS
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://nova-ai-bmtt.vercel.app",  # ✅ Your exact Vercel URL
-        "https://*.vercel.app",
-        "https://*.render.com",
-        "https://nova-ai-1-56i0.onrender.com",  # ✅ Your backend URL
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Access-Control-Allow-Origin",
+        "Access-Control-Allow-Headers",
+        "Access-Control-Allow-Methods",
+    ],
+    expose_headers=[
+        "Content-Length",
+        "Content-Type",
+        "Authorization",
+    ],
+    max_age=3600,
 )
 
 # ============================================
@@ -226,6 +261,15 @@ def init_db():
     db.close()
 
 init_db()
+
+# ============================================
+# OPTIONS HANDLER (For Preflight Requests)
+# ============================================
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Handle preflight OPTIONS requests"""
+    return {"message": "OK"}
 
 # ============================================
 # HEALTH CHECK
@@ -410,7 +454,7 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
         return {"success": False, "error": str(e)}
 
 # ============================================
-# FILE UPLOAD ENDPOINTS ✅ NEW
+# FILE UPLOAD ENDPOINTS
 # ============================================
 
 @app.post("/api/upload")
@@ -481,6 +525,7 @@ if __name__ == "__main__":
     ║  🔐 Auth: JWT Authentication Ready                      ║
     ║  📎 File Upload: PDF, DOCX, TXT, Images                 ║
     ║  🧠 RAG: Document Q&A                                   ║
+    ║  🌐 CORS: Configured for Vercel + Render               ║
     ╚═══════════════════════════════════════════════════════════╝
     """)
     uvicorn.run(
