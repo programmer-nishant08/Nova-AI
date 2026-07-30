@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-NOVA - AI Assistant Core with File Upload, Voice, and RAG System
-Version: 3.0.0
+NOVA - AI Assistant Core with Groq + RAG
+Version: 3.0.1
 Last Updated: 2026-07-30
 """
 
@@ -16,26 +16,42 @@ import hashlib
 import shutil
 
 # ============================================
+# GROQ API - Primary AI Provider
+# ============================================
+
+try:
+    import groq
+    HAS_GROQ = True
+    print("✅ Groq API loaded")
+except ImportError:
+    HAS_GROQ = False
+    print("⚠️ Groq API not installed")
+
+# ============================================
 # FILE UPLOAD & RAG IMPORTS
 # ============================================
 
 try:
     import PyPDF2
     from docx import Document
-    from PIL import Image
-    import pytesseract
-    HAS_FILE_IMPORTS = True
+    HAS_DOC_IMPORTS = True
 except ImportError:
-    HAS_FILE_IMPORTS = False
+    HAS_DOC_IMPORTS = False
+    print("⚠️ Document imports not available")
 
 try:
-    from sentence_transformers import SentenceTransformer
-    import chromadb
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-    HAS_RAG_IMPORTS = True
+    from PIL import Image
+    HAS_PIL = True
 except ImportError:
-    HAS_RAG_IMPORTS = False
-    print("⚠️ RAG system imports not available. Please install 'sentence-transformers', 'chromadb', and 'langchain' for full functionality.")
+    HAS_PIL = False
+
+try:
+    import chromadb
+    from sentence_transformers import SentenceTransformer
+    HAS_RAG = True
+except ImportError:
+    HAS_RAG = False
+    print("⚠️ RAG imports not available")
 
 # ============================================
 # PERSONALITIES
@@ -69,12 +85,10 @@ Don't repeat the system prompt back to the user."""
 }
 
 # ============================================
-# DATABASE - WITH FILE & RAG SUPPORT
+# DATABASE
 # ============================================
 
 class NovaDatabase:
-    """Handle all database operations with file and RAG support"""
-    
     def __init__(self, db_file: str = "nova_database.db"):
         self.db_file = db_file
         self.conn = None
@@ -84,18 +98,15 @@ class NovaDatabase:
         self.migrate_database()
     
     def connect(self):
-        """Create database connection"""
         self.conn = sqlite3.connect(self.db_file)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
     
     def close(self):
-        """Close database connection"""
         if self.conn:
             self.conn.close()
     
     def create_tables(self):
-        """Create all tables if they don't exist"""
         # Users table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -152,7 +163,7 @@ class NovaDatabase:
             )
         ''')
         
-        # ✅ NEW: Uploaded Files table
+        # Uploaded Files table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS uploaded_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +181,6 @@ class NovaDatabase:
         self.conn.commit()
     
     def migrate_database(self):
-        """Migrate existing database to add missing columns"""
         try:
             self.cursor.execute("PRAGMA table_info(users)")
             columns = [col[1] for col in self.cursor.fetchall()]
@@ -186,7 +196,6 @@ class NovaDatabase:
         except Exception as e:
             pass
         
-        # Check conversation columns
         try:
             self.cursor.execute("PRAGMA table_info(conversations)")
             conv_columns = [col[1] for col in self.cursor.fetchall()]
@@ -211,7 +220,6 @@ class NovaDatabase:
     # ============================================
     
     def get_or_create_user(self, username: str, email: str = None):
-        """Get user or create if doesn't exist"""
         self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
         user = self.cursor.fetchone()
         
@@ -234,13 +242,11 @@ class NovaDatabase:
             return dict(self.cursor.fetchone())
     
     def get_user_by_email(self, email: str):
-        """Get user by email"""
         self.cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
         user = self.cursor.fetchone()
         return dict(user) if user else None
     
     def get_user_by_id(self, user_id: int):
-        """Get user by ID"""
         self.cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         user = self.cursor.fetchone()
         return dict(user) if user else None
@@ -250,7 +256,6 @@ class NovaDatabase:
     # ============================================
     
     def create_conversation(self, user_id: int, title: str = "New Conversation"):
-        """Create a new conversation"""
         self.cursor.execute(
             "INSERT INTO conversations (user_id, title) VALUES (?, ?)",
             (user_id, title)
@@ -259,7 +264,6 @@ class NovaDatabase:
         return self.cursor.lastrowid
     
     def get_conversations(self, user_id: int):
-        """Get all conversations for a user"""
         self.cursor.execute(
             "SELECT * FROM conversations WHERE user_id = ? ORDER BY updated_at DESC",
             (user_id,)
@@ -267,7 +271,6 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     def get_conversation(self, conversation_id: int):
-        """Get a specific conversation"""
         self.cursor.execute(
             "SELECT * FROM conversations WHERE id = ?",
             (conversation_id,)
@@ -276,7 +279,6 @@ class NovaDatabase:
         return dict(row) if row else None
     
     def update_conversation_title(self, conversation_id: int, title: str):
-        """Update conversation title"""
         self.cursor.execute(
             "UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (title, conversation_id)
@@ -284,7 +286,6 @@ class NovaDatabase:
         self.conn.commit()
     
     def update_conversation_summary(self, conversation_id: int, summary: str):
-        """Update conversation summary"""
         self.cursor.execute(
             "UPDATE conversations SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (summary, conversation_id)
@@ -292,7 +293,6 @@ class NovaDatabase:
         self.conn.commit()
     
     def toggle_pin_conversation(self, conversation_id: int, pinned: bool):
-        """Pin or unpin a conversation"""
         self.cursor.execute(
             "UPDATE conversations SET pinned = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (1 if pinned else 0, conversation_id)
@@ -300,7 +300,6 @@ class NovaDatabase:
         self.conn.commit()
     
     def delete_conversation(self, conversation_id: int):
-        """Delete a conversation and all its messages"""
         self.cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
         self.cursor.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         self.conn.commit()
@@ -310,7 +309,6 @@ class NovaDatabase:
     # ============================================
     
     def save_message(self, conversation_id: int, role: str, content: str):
-        """Save a message to the database"""
         self.cursor.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
             (conversation_id, role, content)
@@ -324,7 +322,6 @@ class NovaDatabase:
         return message_id
     
     def get_messages(self, conversation_id: int, limit: int = 50):
-        """Get messages from a conversation"""
         self.cursor.execute(
             "SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT ?",
             (conversation_id, limit)
@@ -332,7 +329,6 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     def search_messages(self, user_id: int, query: str):
-        """Search for messages containing query"""
         self.cursor.execute('''
             SELECT c.title, m.content, m.timestamp 
             FROM messages m
@@ -343,11 +339,10 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     # ============================================
-    # FILE METHODS ✅ NEW
+    # FILE METHODS
     # ============================================
     
     def save_uploaded_file(self, user_id: int, filename: str, file_path: str, file_type: str, file_size: int, content: str = None):
-        """Save uploaded file metadata to database"""
         self.cursor.execute('''
             INSERT INTO uploaded_files (user_id, filename, file_path, file_type, file_size, content)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -356,7 +351,6 @@ class NovaDatabase:
         return self.cursor.lastrowid
     
     def get_uploaded_files(self, user_id: int):
-        """Get all uploaded files for a user"""
         self.cursor.execute(
             "SELECT * FROM uploaded_files WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,)
@@ -364,13 +358,11 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     def get_uploaded_file(self, file_id: int):
-        """Get a specific uploaded file"""
         self.cursor.execute("SELECT * FROM uploaded_files WHERE id = ?", (file_id,))
         row = self.cursor.fetchone()
         return dict(row) if row else None
     
     def delete_uploaded_file(self, file_id: int):
-        """Delete an uploaded file"""
         file = self.get_uploaded_file(file_id)
         if file and os.path.exists(file['file_path']):
             os.remove(file['file_path'])
@@ -382,7 +374,6 @@ class NovaDatabase:
     # ============================================
     
     def save_user_memory(self, user_id: int, memory_type: str, content: str, source_message_id: int = None):
-        """Save a memory about a user"""
         self.cursor.execute('''
             INSERT INTO user_memory (user_id, memory_type, content, source_message_id)
             VALUES (?, ?, ?, ?)
@@ -391,7 +382,6 @@ class NovaDatabase:
         return self.cursor.lastrowid
     
     def get_user_memories(self, user_id: int, limit: int = 20):
-        """Get all active memories for a user"""
         self.cursor.execute('''
             SELECT * FROM user_memory 
             WHERE user_id = ? AND is_active = 1 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
@@ -400,7 +390,6 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     def get_user_memories_by_type(self, user_id: int, memory_type: str):
-        """Get memories of a specific type"""
         self.cursor.execute('''
             SELECT * FROM user_memory 
             WHERE user_id = ? AND memory_type = ? AND is_active = 1
@@ -409,30 +398,18 @@ class NovaDatabase:
         return [dict(row) for row in self.cursor.fetchall()]
     
     def update_memory(self, memory_id: int, content: str):
-        """Update a memory"""
         self.cursor.execute('''
             UPDATE user_memory SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
         ''', (content, memory_id))
         self.conn.commit()
     
     def deactivate_memory(self, memory_id: int):
-        """Deactivate a memory (soft delete)"""
         self.cursor.execute('''
             UPDATE user_memory SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
         ''', (memory_id,))
         self.conn.commit()
     
-    def expire_old_memories(self, days: int = 30):
-        """Expire memories older than X days"""
-        self.cursor.execute('''
-            UPDATE user_memory 
-            SET is_active = 0, updated_at = CURRENT_TIMESTAMP 
-            WHERE created_at < datetime('now', '-? days')
-        ''', (days,))
-        self.conn.commit()
-    
     def get_stats(self, user_id: int):
-        """Get user statistics"""
         self.cursor.execute('''
             SELECT COUNT(*) as total_messages FROM messages m
             JOIN conversations c ON m.conversation_id = c.id
@@ -470,12 +447,9 @@ class NovaDatabase:
 # ============================================
 
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo"""
     try:
         from bs4 import BeautifulSoup
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         url = f"https://html.duckduckgo.com/html/?q={query}"
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -503,7 +477,6 @@ def web_search(query: str) -> str:
 # ============================================
 
 def execute_python_code(code: str) -> str:
-    """Execute Python code safely"""
     import subprocess
     import sys
     import os
@@ -535,14 +508,14 @@ def execute_python_code(code: str) -> str:
         return f"❌ Execution error: {str(e)}"
 
 # ============================================
-# FILE PROCESSING ✅ NEW
+# FILE PROCESSING
 # ============================================
 
 def extract_text_from_file(file_path: str, file_type: str) -> str:
-    """Extract text from uploaded files"""
     try:
         if file_type == 'application/pdf':
-            # Extract from PDF
+            if not HAS_DOC_IMPORTS:
+                return "PDF support not installed. Run: pip install PyPDF2"
             with open(file_path, 'rb') as f:
                 reader = PyPDF2.PdfReader(f)
                 text = ""
@@ -551,7 +524,8 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
                 return text
         
         elif file_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-            # Extract from DOCX
+            if not HAS_DOC_IMPORTS:
+                return "DOCX support not installed. Run: pip install python-docx"
             doc = Document(file_path)
             text = ""
             for paragraph in doc.paragraphs:
@@ -559,19 +533,17 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
             return text
         
         elif file_type == 'text/plain':
-            # Extract from TXT
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
         
         elif file_type.startswith('image/'):
-            # Extract from Image using OCR
+            if not HAS_PIL:
+                return "Image support not installed. Run: pip install Pillow"
             try:
-                import pytesseract
                 image = Image.open(file_path)
-                text = pytesseract.image_to_string(image)
-                return text
-            except:
-                return "OCR not available for this image."
+                return "Image processed. Content extraction not available."
+            except Exception as e:
+                return f"Image error: {str(e)}"
         
         else:
             return f"Unsupported file type: {file_type}"
@@ -580,33 +552,27 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
         return f"Error extracting text: {str(e)}"
 
 # ============================================
-# RAG SYSTEM ✅ NEW
+# RAG SYSTEM
 # ============================================
 
 class RAGSystem:
-    """Retrieval-Augmented Generation System"""
-    
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.collection_name = f"user_{user_id}_docs"
         self.chroma_client = None
         self.embedding_model = None
         self.collection = None
-        self._initialize()
+        
+        if HAS_RAG:
+            self._initialize()
+        else:
+            print("⚠️ RAG not available")
     
     def _initialize(self):
-        """Initialize ChromaDB and embedding model"""
-        if not HAS_RAG_IMPORTS:
-            return
-        
         try:
-            # Initialize ChromaDB client
             self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            
-            # Initialize embedding model
             self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             
-            # Get or create collection
             try:
                 self.collection = self.chroma_client.get_collection(self.collection_name)
             except:
@@ -615,21 +581,28 @@ class RAGSystem:
         except Exception as e:
             print(f"RAG initialization error: {e}")
     
+    def _split_text(self, text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+        chunks = []
+        start = 0
+        text_length = len(text)
+        
+        while start < text_length:
+            end = start + chunk_size
+            if end < text_length:
+                while end > start and text[end] not in [' ', '\n', '.', '!', '?']:
+                    end -= 1
+            chunks.append(text[start:end].strip())
+            start = end - overlap
+        
+        return [chunk for chunk in chunks if len(chunk) > 20]
+    
     def add_document(self, file_id: int, content: str, metadata: dict = None):
-        """Add a document to the vector database"""
-        if not HAS_RAG_IMPORTS or self.collection is None:
+        if not HAS_RAG or self.collection is None:
             return
         
         try:
-            # Split text into chunks
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50,
-                length_function=len,
-            )
-            chunks = text_splitter.split_text(content)
+            chunks = self._split_text(content)
             
-            # Generate embeddings and add to collection
             for i, chunk in enumerate(chunks):
                 embedding = self.embedding_model.encode(chunk).tolist()
                 self.collection.add(
@@ -645,8 +618,7 @@ class RAGSystem:
             print(f"Error adding document to RAG: {e}")
     
     def search(self, query: str, n_results: int = 3) -> List[str]:
-        """Search for relevant documents"""
-        if not HAS_RAG_IMPORTS or self.collection is None:
+        if not HAS_RAG or self.collection is None:
             return []
         
         try:
@@ -665,7 +637,6 @@ class RAGSystem:
             return []
     
     def get_context(self, query: str, n_results: int = 3) -> str:
-        """Get context from relevant documents"""
         docs = self.search(query, n_results)
         if docs:
             return "\n\n".join(docs)
@@ -696,7 +667,6 @@ class NovaBot:
         self.load_user_memories()
     
     def load_conversation_history(self):
-        """Load conversation history from database"""
         messages = self.db.get_messages(self.conversation_id, limit=20)
         self.conversation_history = []
         
@@ -715,11 +685,9 @@ class NovaBot:
                 })
     
     def load_user_memories(self):
-        """Load user memories from database"""
         self.user_memories = self.db.get_user_memories(self.user['id'])
     
     def get_personality_prompt(self) -> str:
-        """Get the full personality prompt with memories"""
         base = PERSONALITIES.get(self.personality, PERSONALITIES['default'])
         
         memory_text = ""
@@ -737,7 +705,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
 {memory_text}"""
     
     def switch_personality(self, new_personality: str) -> bool:
-        """Switch to a different personality"""
         if new_personality in PERSONALITIES:
             self.personality = new_personality
             self.system_prompt = {
@@ -757,7 +724,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         return False
     
     def generate_chat_title(self, conversation_id: int) -> str:
-        """Generate a title based on the first user message in a conversation"""
         messages = self.db.get_messages(conversation_id, limit=5)
         
         for msg in messages:
@@ -770,13 +736,11 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         return "New Conversation"
     
     def extract_memories(self, user_message: str, response: str = "") -> list:
-        """Extract potential memories from a conversation"""
         memories = []
         
         preference_patterns = [
             r"(?:I|I'm|I am) (?:like|prefer|love|enjoy|hate|don't like) (.+?)[\.,]",
             r"(?:My favorite|My preferred) (.+?) is (.+?)[\.,]",
-            r"(?:I|I'm|I am) (?:a|an) (.+?) (?:person|fan|enthusiast)[\.,]",
         ]
         
         for pattern in preference_patterns:
@@ -817,7 +781,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         return memories
     
     def save_memories(self, user_message: str, message_id: int):
-        """Extract and save memories from user message"""
         extracted = self.extract_memories(user_message)
         
         for memory in extracted:
@@ -838,12 +801,9 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         self.load_user_memories()
     
     def upload_file(self, filename: str, file_path: str, file_type: str, file_size: int) -> dict:
-        """Upload and process a file"""
         try:
-            # Extract text from file
             content = extract_text_from_file(file_path, file_type)
             
-            # Save to database
             file_id = self.db.save_uploaded_file(
                 self.user['id'],
                 filename,
@@ -853,8 +813,7 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
                 content
             )
             
-            # Add to RAG if text was extracted
-            if content and len(content) > 50 and HAS_RAG_IMPORTS:
+            if content and len(content) > 50 and HAS_RAG:
                 metadata = {
                     "filename": filename,
                     "file_type": file_type,
@@ -876,11 +835,7 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             }
     
     def get_response(self, user_input: str) -> str:
-        """Get response from AI with RAG support"""
-        
-        # Check for file upload command
-        if user_input.lower().startswith('/upload'):
-            return "Please use the upload button in the chat interface to upload files."
+        """Get response from AI using Groq API ONLY - NO OLLAMA"""
         
         # Check for special commands
         if user_input.lower().startswith('/search'):
@@ -897,17 +852,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             else:
                 return "Please provide code to execute. Example: /run print('Hello')"
         
-        # Check for RAG context (does the user mention uploaded files?)
-        # Try to find relevant context from RAG
-        rag_context = ""
-        if HAS_RAG_IMPORTS and hasattr(self, 'rag'):
-            try:
-                docs = self.rag.search(user_input, n_results=2)
-                if docs:
-                    rag_context = "\n\nHere is some relevant information from your uploaded documents:\n" + "\n---\n".join(docs)
-            except:
-                pass
-        
         # Save user message
         message_id = self.db.save_message(self.conversation_id, "user", user_input)
         self.conversation_history.append({"role": "user", "content": user_input})
@@ -915,68 +859,45 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         # Extract and save memories
         self.save_memories(user_input, message_id)
         
-        try:
-            # Try Groq API
+        # Build messages for Groq
+        messages_to_send = self.conversation_history.copy()
+        
+        # Add memories
+        if self.user_memories:
+            memory_text = "Here are some facts about the user: " + \
+                          ", ".join([m['content'] for m in self.user_memories[:5]])
+            if messages_to_send and messages_to_send[0]['role'] == 'system':
+                messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
+        
+        # Add RAG context
+        if HAS_RAG and self.rag:
             try:
-                import groq
-                client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
-                
-                # Build messages with RAG context
-                messages_to_send = self.conversation_history.copy()
-                
-                # Add memories
-                if self.user_memories:
-                    memory_text = "Here are some facts about the user: " + \
-                                  ", ".join([m['content'] for m in self.user_memories[:5]])
-                    if messages_to_send and messages_to_send[0]['role'] == 'system':
-                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
-                
-                # Add RAG context
-                if rag_context:
+                docs = self.rag.search(user_input, n_results=2)
+                if docs:
+                    rag_context = "\n\nHere is some relevant information from uploaded documents:\n" + "\n---\n".join(docs)
                     messages_to_send.insert(1, {
                         "role": "system",
                         "content": rag_context
                     })
-                
-                response = client.chat.completions.create(
-                    messages=messages_to_send,
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.7,
-                    max_tokens=512,
-                )
-                full_response = response.choices[0].message.content
-                
             except Exception as e:
-                print(f"Groq error: {e}, falling back to Ollama...")
-                import ollama
-                
-                messages_to_send = self.conversation_history.copy()
-                if self.user_memories:
-                    memory_text = "Here are some facts about the user: " + \
-                                  ", ".join([m['content'] for m in self.user_memories[:5]])
-                    if messages_to_send and messages_to_send[0]['role'] == 'system':
-                        messages_to_send[0]['content'] += f"\n\nUser information: {memory_text}"
-                
-                if rag_context:
-                    messages_to_send.insert(1, {
-                        "role": "system",
-                        "content": rag_context
-                    })
-                
-                stream = ollama.chat(
-                    model='mistral:7b',
-                    messages=messages_to_send,
-                    stream=True,
-                    options={
-                        'num_ctx': 4096,
-                        'num_predict': 512,
-                        'temperature': 0.7,
-                    }
-                )
-                full_response = ""
-                for chunk in stream:
-                    content = chunk['message']['content']
-                    full_response += content
+                print(f"RAG search error: {e}")
+        
+        try:
+            if not HAS_GROQ:
+                return "Error: Groq API not installed. Please install groq: pip install groq"
+            
+            api_key = os.environ.get("GROQ_API_KEY")
+            if not api_key:
+                return "Error: GROQ_API_KEY not set in environment variables."
+            
+            client = groq.Groq(api_key=api_key)
+            response = client.chat.completions.create(
+                messages=messages_to_send,
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=512,
+            )
+            full_response = response.choices[0].message.content
             
             # Save assistant response
             self.db.save_message(self.conversation_id, "assistant", full_response)
@@ -991,54 +912,20 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
             return full_response
             
         except Exception as e:
-            print(f"Error: {e}")
-            return f"Error: {str(e)}. Please check your API key or Ollama connection."
-    
-    def generate_summary(self, conversation_id: int) -> str:
-        """Generate a summary of a conversation"""
-        messages = self.db.get_messages(conversation_id, limit=20)
-        if len(messages) < 3:
-            return "Short conversation"
-        
-        try:
-            import groq
-            client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
-            
-            text = ""
-            for msg in messages:
-                if msg['role'] == 'user':
-                    text += f"User: {msg['content']}\n"
-                elif msg['role'] == 'assistant':
-                    text += f"Nova: {msg['content']}\n"
-            
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "Summarize this conversation in 1-2 sentences."},
-                    {"role": "user", "content": text}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=100,
-            )
-            summary = response.choices[0].message.content
-            return summary
-        except:
-            return "Conversation"
+            print(f"❌ Groq API error: {e}")
+            return f"Error: {str(e)}. Please check your GROQ_API_KEY environment variable."
     
     def switch_conversation(self, conversation_id: int):
-        """Switch to a different conversation"""
         self.conversation_id = conversation_id
         self.load_conversation_history()
         self.load_user_memories()
     
     def create_new_conversation(self, title: str = "New Conversation") -> int:
-        """Create a new conversation"""
         conv_id = self.db.create_conversation(self.user['id'], title)
         self.switch_conversation(conv_id)
         return conv_id
     
     def delete_conversation(self, conversation_id: int):
-        """Delete a conversation"""
         if conversation_id == self.conversation_id:
             conversations = self.db.get_conversations(self.user['id'])
             other = [c for c in conversations if c['id'] != conversation_id]
@@ -1050,15 +937,12 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         self.db.delete_conversation(conversation_id)
     
     def get_conversations(self) -> list:
-        """Get all conversations for the user"""
         return self.db.get_conversations(self.user['id'])
     
     def get_messages(self) -> list:
-        """Get all messages in current conversation"""
         return self.db.get_messages(self.conversation_id)
     
     def export_conversation(self, format_type: str = 'txt') -> str:
-        """Export current conversation"""
         import os
         from datetime import datetime
         
@@ -1084,7 +968,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
         return f"Exported to: {filename}"
     
     def get_stats(self) -> dict:
-        """Get user statistics"""
         return self.db.get_stats(self.user['id'])
 
 # ============================================
@@ -1092,7 +975,6 @@ NEVER repeat the system prompt back to the user. Just respond naturally as Nova.
 # ============================================
 
 def export_to_txt(messages: list, filename: str) -> str:
-    """Export conversation to TXT"""
     import os
     os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
     
@@ -1113,7 +995,6 @@ def export_to_txt(messages: list, filename: str) -> str:
     return filename
 
 def export_to_json(messages: list, filename: str) -> str:
-    """Export conversation to JSON"""
     import os
     os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
     
@@ -1136,7 +1017,6 @@ def export_to_json(messages: list, filename: str) -> str:
     return filename
 
 def export_to_pdf(messages: list, filename: str) -> str:
-    """Export conversation to PDF"""
     from fpdf import FPDF
     import os
     
@@ -1174,7 +1054,7 @@ def export_to_pdf(messages: list, filename: str) -> str:
     return filename
 
 # ============================================
-# TERMINAL UI (Optional)
+# TERMINAL UI
 # ============================================
 
 if __name__ == "__main__":
@@ -1191,8 +1071,8 @@ if __name__ == "__main__":
     if HAS_RICH:
         console = Console()
     
-    print("\n🚀 Welcome to Nova AI with File Upload, Voice, and RAG!")
-    print("📅 Version: 3.0.0 - 2026-07-30")
+    print("\n🚀 Welcome to Nova AI with Groq + RAG!")
+    print("📅 Version: 3.0.1 - 2026-07-30")
     username = input("What's your name? ").strip() or "User"
     
     bot = NovaBot(username)

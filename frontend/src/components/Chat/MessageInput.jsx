@@ -137,13 +137,21 @@ export default function MessageInput({ onSend, disabled }) {
   };
 
   const startVoiceRecording = () => {
-    if (recognitionRef.current) {
-      setIsRecording(true);
-      recognitionRef.current.start();
-    } else {
-      toast.error('Voice recognition is not supported in your browser.');
-    }
-  };
+  if (recognitionRef.current) {
+    // Request microphone permission
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(() => {
+        setIsRecording(true);
+        recognitionRef.current.start();
+      })
+      .catch((err) => {
+        toast.error('Microphone access denied. Please allow microphone access.');
+        console.error('Microphone error:', err);
+      });
+  } else {
+    toast.error('Voice recognition is not supported in your browser. Please use Chrome or Edge.');
+  }
+};
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
